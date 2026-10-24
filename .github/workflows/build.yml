@@ -1,0 +1,48 @@
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        example:
+          - "n"
+          - "y"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/AppData/Local/.xmake
+          key: xmake-${{ hashFiles('xmake.lua') }}
+          restore-keys: |
+            xmake-
+
+      - name: Setup LLVM
+        uses: ZhongRuoyu/setup-llvm@v0
+        with:
+          llvm-version: 22
+
+      - run: |
+          xmake repo -u
+
+      - run: |
+          xmake f -a x64 -m release -p windows -v --example=${{ matrix.example }} -y
+
+      - run: |
+          xmake -v -y
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ github.event.repository.name }}-${{ github.sha }}-example-${{ matrix.example }}-windows-x64
+          path: |
+            build/windows/x64/release/*.lib
+            build/windows/x64/release/*.dll
+            bin/
+          if-no-files-found: error
