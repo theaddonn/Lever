@@ -1,0 +1,11 @@
+build/
+bin/
+.xmake/
+.vscode/
+.claude/
+.idea/
+compile_commands.json
+*.obj
+*.pdb
+*.lib
+*.dll
