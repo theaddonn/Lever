@@ -38,6 +38,21 @@ Relevant SDK headers: `mc/client/gui/oreui/binding/queries/menus/Settings*.h`, `
 
 Tier 1 is attempted first; tier 2 covers whatever tier 1 cannot (the extra tabs, info pages, pause menu). The `features` bitmask in the ABI tells mods which surfaces the active host actually supports.
 
+## Prior art: Dear-OreUI
+
+[Dear-OreUI](https://github.com/copper-lamp/Dear-OreUI) (CC0-1.0, LeviLamina 26.10.x) injects JavaScript into
+the live Ore UI views at runtime instead of patching bundle files: it hooks the TechStack / SceneProvider /
+Router chain and `OreUI::View::initialize`, waits for `OnReadyForBindings`, runs scripts through
+`CoherentHostBridge::sendScript`, and bridges JS calls back to native (`facet:request` ->
+`OreUIFacetBridge`). It verified this on the world list page only, states that JsonUI pages (main menu,
+in-game screens) are a different stack it does not cover, and does not touch the settings screen.
+
+Tier 2 of this library should port that pipeline (view capture, `sendScript`, the JS<->native bridge, the
+vtable fingerprint check before installing a hook, JS console/exception routing to the native logger)
+rather than splicing `hbui` bundles on load, re-verified against LeviLamina 26.51.6. The licence allows
+copying; keep a credit line in the source files that derive from it. Tier 1 (native settings registry) and
+the embedded-library host election stay as designed here; Dear-OreUI is a runtime dependency mod.
+
 ## Host election
 
 Several mods embed OreSettings, each with its own copy of the code and its own statics. Exactly one copy per process must install the hooks.
