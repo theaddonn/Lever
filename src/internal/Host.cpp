@@ -11,13 +11,13 @@
 #include <atomic>
 #include <memory>
 
-namespace ore_settings::detail::host {
+namespace lever::detail::host {
 
 namespace {
 
 // Keeps a C callback set alive and calls `release` exactly once when the last std::function wrapper is destroyed.
 struct Cookie {
-    OreSettingsSettingDesc desc{};
+    LeverSettingDesc desc{};
     ~Cookie() {
         if (desc.release) desc.release(desc.user);
     }
@@ -26,7 +26,7 @@ struct Cookie {
 std::string str(const char* s) { return s ? std::string(s) : std::string(); }
 
 Setting toSetting(const std::shared_ptr<Cookie>& c) {
-    const OreSettingsSettingDesc& d = c->desc;
+    const LeverSettingDesc& d = c->desc;
     Setting                       s;
     s.id          = str(d.id);
     s.label       = str(d.label);
@@ -56,8 +56,8 @@ Setting toSetting(const std::shared_ptr<Cookie>& c) {
     return s;
 }
 
-int hostRegisterMod(const OreSettingsModInfo* info) {
-    if (!info || info->size < sizeof(OreSettingsModInfo) || !info->id) return ORESETTINGS_E_INVALID;
+int hostRegisterMod(const LeverModInfo* info) {
+    if (!info || info->size < sizeof(LeverModInfo) || !info->id) return LEVER_E_INVALID;
     ModInfo mi;
     mi.id          = str(info->id);
     mi.displayName = str(info->displayName);
@@ -65,49 +65,49 @@ int hostRegisterMod(const OreSettingsModInfo* info) {
     mi.description = str(info->description);
     mi.version     = {info->versionMajor, info->versionMinor, info->versionPatch};
     std::lock_guard<std::mutex> lk(model().mutex);
-    return model().addMod(std::move(mi)) ? ORESETTINGS_OK : ORESETTINGS_E_DUPLICATE;
+    return model().addMod(std::move(mi)) ? LEVER_OK : LEVER_E_DUPLICATE;
 }
 
-int hostRegisterPage(const OreSettingsPageDesc* page) {
-    if (!page || page->size < sizeof(OreSettingsPageDesc) || !page->modId || !page->pageId) return ORESETTINGS_E_INVALID;
+int hostRegisterPage(const LeverPageDesc* page) {
+    if (!page || page->size < sizeof(LeverPageDesc) || !page->modId || !page->pageId) return LEVER_E_INVALID;
     std::lock_guard<std::mutex> lk(model().mutex);
-    if (!model().findMod(page->modId)) return ORESETTINGS_E_NOT_FOUND;
-    if (model().findPage(page->modId, page->pageId)) return ORESETTINGS_E_DUPLICATE;
+    if (!model().findMod(page->modId)) return LEVER_E_NOT_FOUND;
+    if (model().findPage(page->modId, page->pageId)) return LEVER_E_DUPLICATE;
     Page* p = model().addPage(page->modId, page->pageId, str(page->title), str(page->icon));
-    if (!p) return ORESETTINGS_E_INVALID;
+    if (!p) return LEVER_E_INVALID;
     p->surfaces = page->surfaces;
-    return ORESETTINGS_OK;
+    return LEVER_OK;
 }
 
 int hostSetPageSurfaces(const char* modId, const char* pageId, std::uint32_t surfaces) {
-    if (!modId || !pageId) return ORESETTINGS_E_INVALID;
+    if (!modId || !pageId) return LEVER_E_INVALID;
     std::lock_guard<std::mutex> lk(model().mutex);
     Page* p = model().findPage(modId, pageId);
-    if (!p) return ORESETTINGS_E_NOT_FOUND;
+    if (!p) return LEVER_E_NOT_FOUND;
     p->surfaces = surfaces;
-    return ORESETTINGS_OK;
+    return LEVER_OK;
 }
 
-int hostAddSetting(const OreSettingsSettingDesc* desc) {
-    if (!desc || desc->size < sizeof(OreSettingsSettingDesc) || !desc->modId || !desc->pageId || !desc->id)
-        return ORESETTINGS_E_INVALID;
+int hostAddSetting(const LeverSettingDesc* desc) {
+    if (!desc || desc->size < sizeof(LeverSettingDesc) || !desc->modId || !desc->pageId || !desc->id)
+        return LEVER_E_INVALID;
     auto cookie  = std::make_shared<Cookie>();
     cookie->desc = *desc;
     std::lock_guard<std::mutex> lk(model().mutex);
-    if (!model().findPage(desc->modId, desc->pageId)) return ORESETTINGS_E_NOT_FOUND;
+    if (!model().findPage(desc->modId, desc->pageId)) return LEVER_E_NOT_FOUND;
     // On failure the rejected cookie is destroyed and would call release(): detach it so ownership stays with the caller.
     Setting* s = model().addSetting(desc->modId, desc->pageId, toSetting(cookie));
     if (!s) {
         cookie->desc.release = nullptr;
-        return ORESETTINGS_E_DUPLICATE;
+        return LEVER_E_DUPLICATE;
     }
-    return ORESETTINGS_OK;
+    return LEVER_OK;
 }
 
 int hostUnregisterMod(const char* modId) {
-    if (!modId) return ORESETTINGS_E_INVALID;
+    if (!modId) return LEVER_E_INVALID;
     std::lock_guard<std::mutex> lk(model().mutex);
-    return model().removeMod(modId) ? ORESETTINGS_OK : ORESETTINGS_E_NOT_FOUND;
+    return model().removeMod(modId) ? LEVER_OK : LEVER_E_NOT_FOUND;
 }
 
 // ---- Hook installation: STUBS. Nothing is hooked yet. ----
@@ -130,11 +130,11 @@ void installTier2Hooks() {
 
 int hostActivate() {
     static std::atomic<bool> activated{false};
-    if (activated.exchange(true)) return ORESETTINGS_OK; // hooks are installed exactly once
-    logInfo(std::string("this copy (OreSettings ") + ORESETTINGS_VERSION_STRING + ") is the host");
+    if (activated.exchange(true)) return LEVER_OK; // hooks are installed exactly once
+    logInfo(std::string("this copy (Lever ") + LEVER_VERSION_STRING + ") is the host");
     installTier1Hooks();
     installTier2Hooks();
-    return ORESETTINGS_OK;
+    return LEVER_OK;
 }
 
 } // namespace
@@ -144,14 +144,14 @@ Registry& model() {
     return registry;
 }
 
-const OreSettingsHostTable* table() {
-    static const OreSettingsHostTable t = [] {
-        OreSettingsHostTable v{};
-        v.size            = sizeof(OreSettingsHostTable);
-        v.abiVersion      = ORESETTINGS_ABI_VERSION;
-        v.libVersionMajor = ORESETTINGS_VERSION_MAJOR;
-        v.libVersionMinor = ORESETTINGS_VERSION_MINOR;
-        v.libVersionPatch = ORESETTINGS_VERSION_PATCH;
+const LeverHostTable* table() {
+    static const LeverHostTable t = [] {
+        LeverHostTable v{};
+        v.size            = sizeof(LeverHostTable);
+        v.abiVersion      = LEVER_ABI_VERSION;
+        v.libVersionMajor = LEVER_VERSION_MAJOR;
+        v.libVersionMinor = LEVER_VERSION_MINOR;
+        v.libVersionPatch = LEVER_VERSION_PATCH;
         v.features        = 0; // grows as the hooks above get implemented
         v.registerMod     = &hostRegisterMod;
         v.registerPage    = &hostRegisterPage;
@@ -164,4 +164,4 @@ const OreSettingsHostTable* table() {
     return &t;
 }
 
-} // namespace ore_settings::detail::host
+} // namespace lever::detail::host

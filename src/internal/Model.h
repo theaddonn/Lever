@@ -4,8 +4,8 @@
 //  - every embedded copy keeps a "local" registry (buffer + source of truth for its own mod's callbacks);
 //  - the host copy keeps one more registry holding the union of everything every copy forwarded.
 
-#include "oresettings/OreSettings.h"
-#include "oresettings/abi.h"
+#include "lever/Lever.h"
+#include "lever/abi.h"
 
 #include <functional>
 #include <list>
@@ -13,14 +13,14 @@
 #include <string>
 #include <vector>
 
-namespace ore_settings::detail {
+namespace lever::detail {
 
 struct Setting {
     std::string           id, label, description;
-    OreSettingsKind       kind = ORESETTINGS_KIND_TOGGLE;
+    LeverKind       kind = LEVER_KIND_TOGGLE;
     double                min = 0, max = 1, step = 0;
     std::vector<std::string> options;
-    OreSettingsBannerKind bannerKind = ORESETTINGS_BANNER_INFO;
+    LeverBannerKind bannerKind = LEVER_BANNER_INFO;
     std::uint32_t         maxLength  = 256;
 
     std::function<bool()>                 getBool;
@@ -41,11 +41,11 @@ struct Page {
     : id(pageId), title(std::move(pageTitle)), icon(std::move(pageIcon)), handle(modId, std::move(pageId), true) {}
 
     std::string   id, title, icon;
-    std::uint32_t surfaces          = ORESETTINGS_SURFACE_GLOBAL_SETTINGS;
+    std::uint32_t surfaces          = LEVER_SURFACE_GLOBAL_SETTINGS;
     bool          forwarded         = false; // local registry only
     std::uint32_t forwardedSurfaces = 0;     // local registry only
     std::list<Setting> settings;
-    ore_settings::Page handle; // what addPage() hands to the consumer
+    lever::Page handle; // what addPage() hands to the consumer
 };
 
 struct Mod {
@@ -74,4 +74,4 @@ public:
     bool removeMod(std::string_view id);
 };
 
-} // namespace ore_settings::detail
+} // namespace lever::detail

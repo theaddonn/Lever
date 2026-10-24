@@ -1,14 +1,14 @@
 // Host election over a named file mapping.
 //
-// Every mod embeds its own copy of OreSettings, but only one copy may install the game hooks. All copies meet in a
+// Every mod embeds its own copy of Lever, but only one copy may install the game hooks. All copies meet in a
 // small shared-memory slot:
 //
 //   - The slot is a *named file mapping*. The name carries the ABI generation and the process id:
-//         Local\OreSettings.v<ABI>.p<PID>
+//         Local\Lever.v<ABI>.p<PID>
 //     "Local\" is per logon session, not per process, so two Minecraft instances in one session would otherwise see
 //     each other's function pointers. The pid keeps the slot process-wide. The ABI generation keeps incompatible
 //     generations apart (they simply never find each other).
-//   - Each copy appends {packed version, pointer to its OreSettingsHostTable} when it is first used. Nothing is
+//   - Each copy appends {packed version, pointer to its LeverHostTable} when it is first used. Nothing is
 //     hooked at this point.
 //   - At first real use (see Api.cpp: the first level join, or an explicit attachNow()) any copy may call
 //     attachOrHost(). Under the slot's spin lock the first caller picks the entry with the highest version (the
@@ -32,17 +32,17 @@
 
 #include <Windows.h>
 
-namespace ore_settings::detail::election {
+namespace lever::detail::election {
 
 namespace {
 
 constexpr std::uint32_t kMagic      = 0x5345524Fu; // "ORES"
-constexpr std::uint32_t kLayout     = 1;           // changes together with ORESETTINGS_ABI_VERSION, never alone
+constexpr std::uint32_t kLayout     = 1;           // changes together with LEVER_ABI_VERSION, never alone
 constexpr std::uint32_t kMaxEntries = 32;
 
 struct Entry {
     std::uint64_t version; // packVersion()
-    std::uint64_t table;   // const OreSettingsHostTable*, valid in this process only
+    std::uint64_t table;   // const LeverHostTable*, valid in this process only
 };
 
 struct Slot {
@@ -59,7 +59,7 @@ std::mutex                                  gMutex; // serialises threads of thi
 HANDLE                                      gMapping = nullptr;
 Slot*                                       gSlot    = nullptr;
 bool                                        gRegistered = false;
-std::atomic<const OreSettingsHostTable*>    gHost{nullptr};
+std::atomic<const LeverHostTable*>    gHost{nullptr};
 
 struct SlotLock {
     explicit SlotLock(Slot* s) : slot(s) {
@@ -78,7 +78,7 @@ struct SlotLock {
 Slot* openSlot() {
     if (gSlot) return gSlot;
     wchar_t name[96];
-    swprintf(name, 96, L"Local\\OreSettings.v%u.p%lu", static_cast<unsigned>(ORESETTINGS_ABI_VERSION), GetCurrentProcessId());
+    swprintf(name, 96, L"Local\\Lever.v%u.p%lu", static_cast<unsigned>(LEVER_ABI_VERSION), GetCurrentProcessId());
     gMapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(Slot), name);
     if (!gMapping) return nullptr;
     void* view = MapViewOfFile(gMapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Slot));
@@ -122,12 +122,12 @@ void registerSelf() {
     gRegistered = true;
 }
 
-const OreSettingsHostTable* attachOrHost() {
+const LeverHostTable* attachOrHost() {
     if (const auto* cached = gHost.load(std::memory_order_acquire)) return cached;
 
     registerSelf();
-    const OreSettingsHostTable* activate = nullptr;
-    const OreSettingsHostTable* result   = nullptr;
+    const LeverHostTable* activate = nullptr;
+    const LeverHostTable* result   = nullptr;
     {
         std::lock_guard<std::mutex> lk(gMutex);
         if (!gSlot) return nullptr;
@@ -140,18 +140,18 @@ const OreSettingsHostTable* attachOrHost() {
             if (!best) return nullptr;
             gSlot->hostTable   = best->table;
             gSlot->hostVersion = best->version;
-            activate           = reinterpret_cast<const OreSettingsHostTable*>(best->table);
+            activate           = reinterpret_cast<const LeverHostTable*>(best->table);
         }
-        result = reinterpret_cast<const OreSettingsHostTable*>(gSlot->hostTable);
+        result = reinterpret_cast<const LeverHostTable*>(gSlot->hostTable);
     }
     gHost.store(result, std::memory_order_release);
     // Outside the slot lock: activation installs hooks and may take a while. Registrations forwarded meanwhile are
     // buffered by the host model.
-    if (activate && ORESETTINGS_TABLE_HAS(activate, activateHost)) activate->activateHost();
+    if (activate && LEVER_TABLE_HAS(activate, activateHost)) activate->activateHost();
     return result;
 }
 
-const OreSettingsHostTable* hostTable() { return gHost.load(std::memory_order_acquire); }
+const LeverHostTable* hostTable() { return gHost.load(std::memory_order_acquire); }
 
 void withdraw() {
     std::lock_guard<std::mutex> lk(gMutex);
@@ -176,4 +176,4 @@ void withdraw() {
     gRegistered = false;
 }
 
-} // namespace ore_settings::detail::election
+} // namespace lever::detail::election

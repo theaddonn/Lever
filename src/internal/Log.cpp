@@ -3,14 +3,14 @@
 #include "ll/api/io/Logger.h"
 #include "ll/api/mod/NativeMod.h"
 
-namespace ore_settings::detail {
+namespace lever::detail {
 
 void logInfo(const std::string& message) {
-    if (auto mod = ll::mod::NativeMod::current()) mod->getLogger().info("[OreSettings] {}", message);
+    if (auto mod = ll::mod::NativeMod::current()) mod->getLogger().info("[Lever] {}", message);
 }
 
 void logWarn(const std::string& message) {
-    if (auto mod = ll::mod::NativeMod::current()) mod->getLogger().warn("[OreSettings] {}", message);
+    if (auto mod = ll::mod::NativeMod::current()) mod->getLogger().warn("[Lever] {}", message);
 }
 
-} // namespace ore_settings::detail
+} // namespace lever::detail

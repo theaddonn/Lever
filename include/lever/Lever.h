@@ -1,7 +1,7 @@
 #pragma once
 
 /**
- * OreSettings: settings pages and mod info pages inside the vanilla Ore UI settings screen, a pause-menu entry and a
+ * Lever: settings pages and mod info pages inside the vanilla Ore UI settings screen, a pause-menu entry and a
  * world-creation tab, for LeviLamina Minecraft Bedrock client mods.
  *
  * The library is linked statically into every mod that uses it. At runtime exactly one copy per process becomes the
@@ -13,7 +13,7 @@
  *  - Callbacks (getters, setters, onClick) run on the game's UI thread. Keep them short and do not throw.
  *  - Your mod must call `unregisterMod` from `disable()`/`unload()` (or at least before its DLL is unloaded), because
  *    the callbacks point into your DLL.
- *  - Mods built against an older or newer OreSettings interoperate; `hostInfo().features` tells you what the active
+ *  - Mods built against an older or newer Lever interoperate; `hostInfo().features` tells you what the active
  *    host can do.
  */
 
@@ -24,7 +24,7 @@
 #include <string_view>
 #include <vector>
 
-namespace ore_settings {
+namespace lever {
 
 struct Version {
     std::uint32_t major = 0;
@@ -51,7 +51,7 @@ struct ModInfo {
     std::string description;
 };
 
-/// What the active host supports (mirrors the ORESETTINGS_FEATURE_* flags in abi.h).
+/// What the active host supports (mirrors the LEVER_FEATURE_* flags in abi.h).
 struct HostInfo {
     bool          attached = false; ///< false while registrations are still buffered
     bool          isThisCopy = false; ///< true if this mod's embedded copy is the host
@@ -100,7 +100,7 @@ private:
     bool        mValid;
 };
 
-/// The version of the OreSettings copy embedded in this mod.
+/// The version of the Lever copy embedded in this mod.
 [[nodiscard]] std::string_view libraryVersion();
 
 /// Registers a mod. Returns false if the id is empty or already registered by this copy.
@@ -121,4 +121,4 @@ bool attachNow();
 /// Information about the active host (or `attached == false` while still buffering).
 [[nodiscard]] HostInfo hostInfo();
 
-} // namespace ore_settings
+} // namespace lever

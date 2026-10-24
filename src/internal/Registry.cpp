@@ -1,6 +1,6 @@
 #include "Model.h"
 
-namespace ore_settings::detail {
+namespace lever::detail {
 
 Mod* Registry::findMod(std::string_view id) {
     for (auto& m : mods) {
@@ -55,4 +55,4 @@ bool Registry::removeMod(std::string_view id) {
     return false;
 }
 
-} // namespace ore_settings::detail
+} // namespace lever::detail

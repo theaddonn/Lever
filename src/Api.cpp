@@ -1,6 +1,6 @@
 // C++ API -> local model -> (when a host is attached) C ABI calls on the host's table.
 
-#include "oresettings/OreSettings.h"
+#include "lever/Lever.h"
 
 #include "internal/Election.h"
 #include "internal/Host.h"
@@ -15,7 +15,7 @@
 #include <memory>
 #include <mutex>
 
-namespace ore_settings {
+namespace lever {
 
 namespace {
 
@@ -54,11 +54,11 @@ size_t tString(void* u, char* buf, size_t cap) {
 void tSetString(void* u, const char* v) { static_cast<Setting*>(u)->setString(v ? v : ""); }
 void tClick(void* u) { static_cast<Setting*>(u)->onClick(); }
 
-void forwardSetting(const OreSettingsHostTable* t, const Mod& mod, const detail::Page& page, Setting& s) {
+void forwardSetting(const LeverHostTable* t, const Mod& mod, const detail::Page& page, Setting& s) {
     std::vector<const char*> opts;
     for (const auto& o : s.options) opts.push_back(o.c_str());
 
-    OreSettingsSettingDesc d{};
+    LeverSettingDesc d{};
     d.size        = sizeof(d);
     d.modId       = mod.info.id.c_str();
     d.pageId      = page.id.c_str();
@@ -81,20 +81,20 @@ void forwardSetting(const OreSettingsHostTable* t, const Mod& mod, const detail:
     if (s.getString) d.getString = &tString;
     if (s.setString) d.setString = &tSetString;
     if (s.onClick) d.onClick = &tClick;
-    if (t->addSetting(&d) == ORESETTINGS_OK) s.forwarded = true;
+    if (t->addSetting(&d) == LEVER_OK) s.forwarded = true;
 }
 
 // Sends everything not yet forwarded, in registration order. No-op while no host is attached (= buffering).
 void flush() {
-    const OreSettingsHostTable* t = detail::election::hostTable();
-    if (!t || !ORESETTINGS_TABLE_HAS(t, addSetting) || !ORESETTINGS_TABLE_HAS(t, registerPage)
-        || !ORESETTINGS_TABLE_HAS(t, registerMod) || !ORESETTINGS_TABLE_HAS(t, setPageSurfaces))
+    const LeverHostTable* t = detail::election::hostTable();
+    if (!t || !LEVER_TABLE_HAS(t, addSetting) || !LEVER_TABLE_HAS(t, registerPage)
+        || !LEVER_TABLE_HAS(t, registerMod) || !LEVER_TABLE_HAS(t, setPageSurfaces))
         return;
 
     std::lock_guard<std::mutex> lk(local().mutex);
     for (Mod& mod : local().mods) {
         if (!mod.forwarded) {
-            OreSettingsModInfo mi{};
+            LeverModInfo mi{};
             mi.size         = sizeof(mi);
             mi.id           = mod.info.id.c_str();
             mi.displayName  = mod.info.displayName.c_str();
@@ -103,23 +103,23 @@ void flush() {
             mi.versionMajor = mod.info.version.major;
             mi.versionMinor = mod.info.version.minor;
             mi.versionPatch = mod.info.version.patch;
-            if (t->registerMod(&mi) != ORESETTINGS_OK) continue; // retry on the next flush
+            if (t->registerMod(&mi) != LEVER_OK) continue; // retry on the next flush
             mod.forwarded = true;
         }
         for (auto& page : mod.pages) {
             if (!page.forwarded) {
-                OreSettingsPageDesc pd{};
+                LeverPageDesc pd{};
                 pd.size     = sizeof(pd);
                 pd.modId    = mod.info.id.c_str();
                 pd.pageId   = page.id.c_str();
                 pd.title    = page.title.c_str();
                 pd.icon     = page.icon.empty() ? nullptr : page.icon.c_str();
                 pd.surfaces = page.surfaces;
-                if (t->registerPage(&pd) != ORESETTINGS_OK) continue;
+                if (t->registerPage(&pd) != LEVER_OK) continue;
                 page.forwarded         = true;
                 page.forwardedSurfaces = page.surfaces;
             } else if (page.forwardedSurfaces != page.surfaces) {
-                if (t->setPageSurfaces(mod.info.id.c_str(), page.id.c_str(), page.surfaces) == ORESETTINGS_OK)
+                if (t->setPageSurfaces(mod.info.id.c_str(), page.id.c_str(), page.surfaces) == LEVER_OK)
                     page.forwardedSurfaces = page.surfaces;
             }
             for (auto& s : page.settings) {
@@ -180,14 +180,14 @@ void setSurfaces(const std::string& modId, const std::string& pageId, std::uint3
 
 std::uint32_t surfaceBit(Surface s) {
     switch (s) {
-    case Surface::GlobalSettings: return ORESETTINGS_SURFACE_GLOBAL_SETTINGS;
-    case Surface::PauseMenu: return ORESETTINGS_SURFACE_PAUSE_MENU;
-    case Surface::WorldCreation: return ORESETTINGS_SURFACE_WORLD_CREATION;
+    case Surface::GlobalSettings: return LEVER_SURFACE_GLOBAL_SETTINGS;
+    case Surface::PauseMenu: return LEVER_SURFACE_PAUSE_MENU;
+    case Surface::WorldCreation: return LEVER_SURFACE_WORLD_CREATION;
     }
     return 0;
 }
 
-Setting make(std::string_view id, OreSettingsKind kind, std::string_view label, std::string_view description) {
+Setting make(std::string_view id, LeverKind kind, std::string_view label, std::string_view description) {
     Setting s;
     s.id          = std::string(id);
     s.kind        = kind;
@@ -211,18 +211,18 @@ Page& Page::showOnlyIn(Surface surface) {
 }
 
 Page& Page::addHeader(std::string_view id, std::string_view title, std::string_view subtitle) {
-    if (mValid) addSetting(mModId, mId, make(id, ORESETTINGS_KIND_HEADER, title, subtitle));
+    if (mValid) addSetting(mModId, mId, make(id, LEVER_KIND_HEADER, title, subtitle));
     return *this;
 }
 
 Page& Page::addBanner(std::string_view id, std::string_view text, BannerKind kind) {
     if (!mValid) return *this;
-    Setting s = make(id, ORESETTINGS_KIND_BANNER, text, {});
+    Setting s = make(id, LEVER_KIND_BANNER, text, {});
     switch (kind) {
-    case BannerKind::Info: s.bannerKind = ORESETTINGS_BANNER_INFO; break;
-    case BannerKind::Warning: s.bannerKind = ORESETTINGS_BANNER_WARNING; break;
-    case BannerKind::Error: s.bannerKind = ORESETTINGS_BANNER_ERROR; break;
-    case BannerKind::Success: s.bannerKind = ORESETTINGS_BANNER_SUCCESS; break;
+    case BannerKind::Info: s.bannerKind = LEVER_BANNER_INFO; break;
+    case BannerKind::Warning: s.bannerKind = LEVER_BANNER_WARNING; break;
+    case BannerKind::Error: s.bannerKind = LEVER_BANNER_ERROR; break;
+    case BannerKind::Success: s.bannerKind = LEVER_BANNER_SUCCESS; break;
     }
     addSetting(mModId, mId, std::move(s));
     return *this;
@@ -230,7 +230,7 @@ Page& Page::addBanner(std::string_view id, std::string_view text, BannerKind kin
 
 Page& Page::addToggle(std::string_view id, std::string_view label, std::string_view description, BoolGetter getter, BoolSetter setter) {
     if (!mValid) return *this;
-    Setting s = make(id, ORESETTINGS_KIND_TOGGLE, label, description);
+    Setting s = make(id, LEVER_KIND_TOGGLE, label, description);
     s.getBool = std::move(getter);
     s.setBool = std::move(setter);
     if (s.getBool && s.setBool) addSetting(mModId, mId, std::move(s));
@@ -239,7 +239,7 @@ Page& Page::addToggle(std::string_view id, std::string_view label, std::string_v
 
 Page& Page::addSlider(std::string_view id, std::string_view label, std::string_view description, double min, double max, double step, NumberGetter getter, NumberSetter setter) {
     if (!mValid) return *this;
-    Setting s = make(id, ORESETTINGS_KIND_SLIDER, label, description);
+    Setting s = make(id, LEVER_KIND_SLIDER, label, description);
     s.min = min, s.max = max, s.step = step;
     s.getNumber = std::move(getter);
     s.setNumber = std::move(setter);
@@ -249,7 +249,7 @@ Page& Page::addSlider(std::string_view id, std::string_view label, std::string_v
 
 Page& Page::addDropdown(std::string_view id, std::string_view label, std::string_view description, std::vector<std::string> options, IndexGetter getter, IndexSetter setter) {
     if (!mValid) return *this;
-    Setting s = make(id, ORESETTINGS_KIND_DROPDOWN, label, description);
+    Setting s = make(id, LEVER_KIND_DROPDOWN, label, description);
     s.options  = std::move(options);
     s.getIndex = std::move(getter);
     s.setIndex = std::move(setter);
@@ -259,7 +259,7 @@ Page& Page::addDropdown(std::string_view id, std::string_view label, std::string
 
 Page& Page::addTextField(std::string_view id, std::string_view label, std::string_view description, StringGetter getter, StringSetter setter, std::uint32_t maxLength) {
     if (!mValid) return *this;
-    Setting s = make(id, ORESETTINGS_KIND_TEXT_FIELD, label, description);
+    Setting s = make(id, LEVER_KIND_TEXT_FIELD, label, description);
     s.maxLength = maxLength;
     s.getString = std::move(getter);
     s.setString = std::move(setter);
@@ -269,7 +269,7 @@ Page& Page::addTextField(std::string_view id, std::string_view label, std::strin
 
 Page& Page::addButton(std::string_view id, std::string_view label, std::string_view description, Action onClick) {
     if (!mValid) return *this;
-    Setting s = make(id, ORESETTINGS_KIND_BUTTON, label, description);
+    Setting s = make(id, LEVER_KIND_BUTTON, label, description);
     s.onClick = std::move(onClick);
     if (s.onClick) addSetting(mModId, mId, std::move(s));
     return *this;
@@ -277,7 +277,7 @@ Page& Page::addButton(std::string_view id, std::string_view label, std::string_v
 
 // ---- Free functions ----
 
-std::string_view libraryVersion() { return ORESETTINGS_VERSION_STRING; }
+std::string_view libraryVersion() { return LEVER_VERSION_STRING; }
 
 bool registerMod(const ModInfo& info) {
     bool ok;
@@ -291,13 +291,13 @@ bool registerMod(const ModInfo& info) {
 
 void unregisterMod(std::string_view modId) {
     // Tell the host first so no callback into this DLL can happen after we return.
-    const OreSettingsHostTable* t = detail::election::hostTable();
+    const LeverHostTable* t = detail::election::hostTable();
     const std::string           id(modId);
     {
         std::lock_guard<std::mutex> lk(local().mutex);
         Mod* mod = local().findMod(id);
         if (!mod) return;
-        if (mod->forwarded && ORESETTINGS_TABLE_HAS(t, unregisterMod)) t->unregisterMod(id.c_str());
+        if (mod->forwarded && LEVER_TABLE_HAS(t, unregisterMod)) t->unregisterMod(id.c_str());
         local().removeMod(id);
     }
     // Last mod gone: stop listening so no callback outlives our DLL.
@@ -335,13 +335,13 @@ bool attachNow() {
 
 HostInfo hostInfo() {
     HostInfo info;
-    const OreSettingsHostTable* t = detail::election::hostTable();
+    const LeverHostTable* t = detail::election::hostTable();
     if (!t) return info;
     info.attached   = true;
     info.isThisCopy = t == detail::host::table();
     info.version    = {t->libVersionMajor, t->libVersionMinor, t->libVersionPatch};
-    info.features   = t->size >= offsetof(OreSettingsHostTable, features) + sizeof(t->features) ? t->features : 0;
+    info.features   = t->size >= offsetof(LeverHostTable, features) + sizeof(t->features) ? t->features : 0;
     return info;
 }
 
-} // namespace ore_settings
+} // namespace lever

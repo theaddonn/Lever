@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Consumer C++ API (`oresettings/OreSettings.h`) and versioned C ABI (`oresettings/abi.h`).
+- Consumer C++ API (`lever/Lever.h`) and versioned C ABI (`lever/abi.h`).
 - Host election over a per-process named file mapping, with buffering until a host exists.
 - In-process model of mods, pages and settings, and the host-side table implementation.
 - Example client mod (`--example=y`).

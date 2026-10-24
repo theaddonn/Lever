@@ -1,4 +1,4 @@
-# OreSettings
+# Lever
 
 A build-time static library for [LeviLamina](https://github.com/LiteLDev/LeviLamina) Minecraft Bedrock **client** mods. Embed it to get settings pages and mod info pages inside the vanilla Ore UI settings screen (a "Mods" tab), a pause-menu entry and a world-creation tab, without writing anything into the game folder.
 
@@ -18,10 +18,10 @@ Several mods can embed it at the same time: at runtime exactly one copy per proc
 ## Using it in a mod
 
 ```cpp
-#include "oresettings/OreSettings.h"
+#include "lever/Lever.h"
 
 bool MyMod::enable() {
-    using namespace ore_settings;
+    using namespace lever;
     registerMod({"mymod", "My Mod", {1, 0, 0}, "me", "Does things."});
     addPage("mymod", "main", "My Mod", "creator")
         .showIn(Surface::PauseMenu)
@@ -31,7 +31,7 @@ bool MyMod::enable() {
 }
 
 bool MyMod::disable() {
-    ore_settings::unregisterMod("mymod"); // callbacks point into your DLL
+    lever::unregisterMod("mymod"); // callbacks point into your DLL
     return true;
 }
 ```
@@ -45,22 +45,22 @@ Calls are safe at any time after the mod is loaded; they are buffered until a ho
 Put this in your `xmake.lua`, next to your LeviLamina setup:
 
 ```lua
-package("oresettings")
-    set_urls("https://github.com/theaddonn/OreSettings.git")
+package("lever")
+    set_urls("https://github.com/theaddonn/Lever.git")
     add_versions("0.1.0", "<commit sha>")
     add_deps("levilamina")
     on_install("windows", function (package)
         import("package.tools.xmake").install(package, {target_type = "client"})
         os.cp("include", package:installdir())
-        os.cp("build/windows/x64/release/oresettings.lib", package:installdir("lib"))
+        os.cp("build/windows/x64/release/lever.lib", package:installdir("lib"))
     end)
 package_end()
 
-add_requires("oresettings")
+add_requires("lever")
 
 target("MyMod")
     -- ... your levibuildscript rules ...
-    add_packages("levilamina", "oresettings")
+    add_packages("levilamina", "lever")
 ```
 
 The inline package builds the library with xmake, then copies `include/` and the `.lib` into the package. Adjust the build output path if your xmake version lays it out differently.
@@ -68,14 +68,14 @@ The inline package builds the library with xmake, then copies `include/` and the
 ### As a git submodule
 
 ```
-git submodule add https://github.com/theaddonn/OreSettings.git third_party/OreSettings
+git submodule add https://github.com/theaddonn/Lever.git third_party/Lever
 ```
 
 ```lua
-includes("third_party/OreSettings")  -- defines the `oresettings` static library target
+includes("third_party/Lever")  -- defines the `lever` static library target
 
 target("MyMod")
-    add_deps("oresettings")
+    add_deps("lever")
     add_packages("levilamina")
 ```
 
@@ -91,7 +91,7 @@ xmake -y
 
 Add `--example=y` to also build the example mod. On Windows: `xmake f -a x64 -m release -p windows -y && xmake -y`.
 
-The library lands in `build/windows/x64/release/oresettings.lib`.
+The library lands in `build/windows/x64/release/lever.lib`.
 
 ## License
 

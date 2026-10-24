@@ -55,28 +55,28 @@ the embedded-library host election stay as designed here; Dear-OreUI is a runtim
 
 ## Host election
 
-Several mods embed OreSettings, each with its own copy of the code and its own statics. Exactly one copy per process must install the hooks.
+Several mods embed Lever, each with its own copy of the code and its own statics. Exactly one copy per process must install the hooks.
 
-1. **Slot.** A named file mapping holds the rendezvous data. Name: `Local\OreSettings.v<ABI>.p<PID>`. The brief called for `Local\OreSettings.v1`; the pid suffix was added because `Local\` is scoped to the logon session, not the process, so two game instances would otherwise share raw function pointers. The ABI generation in the name means breaking changes (bump `ORESETTINGS_ABI_VERSION`) never meet old copies.
-2. **Registration.** On first use each copy appends `{packed version, pointer to its OreSettingsHostTable}` to the slot, under a spin lock stored in the mapping. It hooks nothing.
+1. **Slot.** A named file mapping holds the rendezvous data. Name: `Local\Lever.v<ABI>.p<PID>`. The brief called for `Local\Lever.v1`; the pid suffix was added because `Local\` is scoped to the logon session, not the process, so two game instances would otherwise share raw function pointers. The ABI generation in the name means breaking changes (bump `LEVER_ABI_VERSION`) never meet old copies.
+2. **Registration.** On first use each copy appends `{packed version, pointer to its LeverHostTable}` to the slot, under a spin lock stored in the mapping. It hooks nothing.
 3. **Election.** At first real use (currently: the first level join; later also the first settings-screen construction) any copy calls `attachOrHost()`. Under the lock the first caller selects the entry with the highest version (earliest registration wins ties) and records it as host, then calls that table's `activateHost()` outside the lock. That function installs the hooks exactly once. Every later call just reads the recorded host.
 4. **Forwarding.** All copies keep a local model of their own mod(s) (the callbacks live in the mod's DLL). Once a host is known they replay it, in order, through the host's C table. Before that, registrations are buffered, so API calls are safe at any time after the mod is loaded. The host merges the registrations of every copy into one model.
 5. **Unload.** A mod calls `unregisterMod` before its DLL goes away; the host drops the mod and releases the callback cookies. If the host DLL itself unloads while others live, the slot is cleared but other copies keep a stale pointer. **Open:** LeviLamina client mods are only unloaded at shutdown, so this is accepted for now; a refcount or a host-handover protocol would fix it.
 
 ## C ABI
 
-`include/oresettings/abi.h`: a plain struct of function pointers with a `size` field and a `features` mask. Descriptor structs carry `const char*` strings (copied by the callee) and C callbacks with a `void* user` cookie. Rules:
+`include/lever/abi.h`: a plain struct of function pointers with a `size` field and a `features` mask. Descriptor structs carry `const char*` strings (copied by the callee) and C callbacks with a `void* user` cookie. Rules:
 
 - Appending fields to a struct is not a breaking change: readers only touch members inside `size`.
-- A newer mod on an older host (or the reverse) works; missing functionality shows up as a missing feature flag or a table member outside `size` (`ORESETTINGS_TABLE_HAS`).
-- Changing the meaning or layout of existing fields is breaking: bump `ORESETTINGS_ABI_VERSION`, which changes the slot name.
+- A newer mod on an older host (or the reverse) works; missing functionality shows up as a missing feature flag or a table member outside `size` (`LEVER_TABLE_HAS`).
+- Changing the meaning or layout of existing fields is breaking: bump `LEVER_ABI_VERSION`, which changes the slot name.
 
 ## Source layout
 
 | File | Role |
 | --- | --- |
-| `include/oresettings/OreSettings.h` | C++ consumer API (`ore_settings` namespace) |
-| `include/oresettings/abi.h` | C ABI between copies |
+| `include/lever/Lever.h` | C++ consumer API (`lever` namespace) |
+| `include/lever/abi.h` | C ABI between copies |
 | `src/Api.cpp` | C++ API to local model to host table; trampolines; lazy init |
 | `src/internal/Registry.cpp`, `Model.h` | mods, pages and settings model, used locally and by the host |
 | `src/internal/Election.cpp` | named file mapping slot, `attachOrHost()` |
