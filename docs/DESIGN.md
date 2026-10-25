@@ -143,7 +143,7 @@ icon is the placeholder (the icon map is JS). `installTier2Hooks()` is still a s
 
 Deploy `bin/LeverExample/` (built with `--example=y`) to `mods/LeverExample/`, start the game, open Settings
 from the main menu. Expected: a "Lever Mods" entry at the end of the General section; opening it shows one row
-"Lever Example 0.1.0" with the description. Log lines (LeviLamina console/log, prefix `[Lever]`), in order:
+"Lever Example 0.1.0" with the description. Log lines (`mods/LeverExample/logs/lever.log`, also the LeviLamina logger with prefix `[Lever]`), in order:
 `settings: hook on Settings::RegistryBuilder::buildDefaultSettingsRegistry installed` (at mod enable),
 `settings: buildDefaultSettingsRegistry hit`, `this copy (Lever 0.1.0) is the host`,
 `settings: wrapped settings-general-group (orig factory ok)`, `settings: registered group lever-mods`,
