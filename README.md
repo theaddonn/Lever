@@ -4,6 +4,8 @@ A build-time static library for [LeviLamina](https://github.com/LiteLDev/LeviLam
 
 Several mods can embed it at the same time: at runtime exactly one copy per process becomes the host and installs the hooks once, the others attach to it through a versioned C ABI.
 
+The cross-copy ABI is built for long-term backward compatibility: a frozen bootstrap table plus versioned interfaces (`lever.registry.v1`, ...) and size-prefixed descriptors, so a newer host always understands an older embedded copy. See "ABI compatibility" in [docs/DESIGN.md](docs/DESIGN.md).
+
 ## Status
 
 **Pre-alpha: design and scaffold.** The consumer API, the C ABI, host election and the in-process model compile, but the game hooks are stubs, so nothing is displayed in game yet. See [docs/DESIGN.md](docs/DESIGN.md) for the plan and the open questions.
@@ -88,6 +90,8 @@ export PATH=~/.local/share/amtool/bin:~/.local/bin:$PATH
 xmake f -p windows -a x64 -m release --toolchain=clang-cl --sdk=~/.local/share/amtool/winsysroot -y
 xmake -y
 ```
+
+Host unit tests (Linux, no LeviLamina needed): `cd tests && xmake f -P . -p linux -a x86_64 -m debug --cc=clang-22 --cxx=clang++-22 --ld=clang++-22 -y && xmake -P . -y && xmake run -P . lever_tests`.
 
 Add `--example=y` to also build the example mod. On Windows: `xmake f -a x64 -m release -p windows -y && xmake -y`.
 
