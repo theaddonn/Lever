@@ -20,6 +20,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -192,7 +193,11 @@ struct FloatProvider : ProviderBase {
         return static_cast<float>(v);
     }
     virtual void setValue(float value) {
-        with([&](Setting& s) { if (s.setNumber) s.setNumber(static_cast<double>(value)); });
+        with([&](Setting& s) {
+            double v = static_cast<double>(value);
+            if (s.step > 0) v = std::round(v / s.step) * s.step; // the UI snaps to the step grid in float
+            if (s.setNumber) s.setNumber(v);
+        });
         notify();
     }
     virtual float getMin() const {
@@ -423,6 +428,19 @@ Element makeSlider(std::string_view id, const Setting& s, SettingKey key) {
         *at<float>(raw, kDerived + 0x0c) = static_cast<float>(s.step);
         *at<bool>(raw, kDerived + 0x10)  = true;
     }
+    // Value text formatter at +0x1f8: the query calls it as (sret string, value, <two more floats>) with the value
+    // already scaled and snapped to the step (SettingsNumberQuery 0xbb049a6); without one the UI prints the raw
+    // float32 through JavaScript (0.9000000357...). Decimals follow the step: 0.05 -> 2, 1 -> 0, none -> 0.
+    int decimals = 0;
+    if (s.step > 0 && s.step < 1) decimals = static_cast<int>(std::ceil(-std::log10(s.step) - 1e-9));
+    if (decimals > 6) decimals = 6;
+    new (at<void>(raw, kDerived + 0x18)) std::function<std::string(const float&, const float&, const float&)>(
+        [decimals](const float& value, const float&, const float&) {
+            char buf[48];
+            std::snprintf(buf, sizeof buf, "%.*f", decimals, static_cast<double>(value));
+            return std::string(buf);
+        }
+    );
     return finish(raw, kNumberFloat);
 }
 
