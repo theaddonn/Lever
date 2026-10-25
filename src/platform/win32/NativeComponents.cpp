@@ -15,6 +15,7 @@
 #include "mc/client/settings/OptionData.h"
 #include "mc/deps/core/memory/IMemoryAllocator.h"
 #include "mc/locale/I18n.h"
+#include "mc/locale/Localization.h"
 
 #include <windows.h>
 
@@ -96,6 +97,15 @@ T* at(void* raw, std::size_t off) {
     return reinterpret_cast<T*>(static_cast<unsigned char*>(raw) + off);
 }
 
+struct ProviderBase;
+void wireChangeListener(void* raw, ProviderBase* provider);
+
+// The vanilla constructors install `provider->setChangeListener([this] { publish(this + 0x140); })` (OptionComponent
+// ctor 0x4224e10, lambda invoke 0xc0c3a0 -> 0x134ac0): the base's pub/sub block at +0x140 is what the settings
+// queries subscribe to, so a provider that does not reach it never updates the screen. Hand-built components wire
+// the same thing.
+constexpr std::uintptr_t kPublishChanged = 0x134ac0;
+
 /// Base part of a hand-built component: the exported TextComponent constructor writes the whole 0x1e0-byte base
 /// (strings, type Text, state functions, pub/sub), then the real vtable and type are patched in.
 void* beginHandBuilt(
@@ -149,6 +159,13 @@ struct ProviderBase {
 };
 static_assert(offsetof(ProviderBase, listener) == 0x08, "IDataProvider layout");
 static_assert(sizeof(std::function<void()>) == 64, "MSVC std::function size");
+
+void wireChangeListener(void* raw, ProviderBase* provider) {
+    const std::uintptr_t fn = imageBase() + kPublishChanged;
+    provider->setChangeListener(std::function<void()>([raw, fn] {
+        reinterpret_cast<void (*)(void*)>(fn)(static_cast<unsigned char*>(raw) + 0x140);
+    }));
+}
 
 // IBooleanDataProvider: + getValue, setValue, flush
 struct BoolProvider : ProviderBase {
@@ -366,8 +383,14 @@ void flushTranslations() {
         gTranslationsDirty = false;
         copy               = gTranslations;
     }
-    ::getI18n().appendAdditionalTranslations(copy, "");
-    logInfo("components: registered " + std::to_string(copy.size()) + " runtime translation(s)");
+    // I18n::appendAdditionalTranslations did not make the keys resolvable for the settings queries (2026-10-25), so
+    // the strings go straight into the current language's table, which is what I18n::get consults. Same thread as
+    // the lookups (the UI thread runs the factories and the queries).
+    ::std::shared_ptr<::Localization const> lang = ::getI18n().getCurrentLanguage().get();
+    if (!lang) return;
+    auto& strings = *const_cast<::Localization&>(*lang).mStrings;
+    for (auto& [k, v] : copy) strings[k] = v;
+    logInfo("components: registered " + std::to_string(copy.size()) + " runtime translation(s) into language table");
 }
 
 std::optional<std::string> descOf(std::string_view id, const Setting& s) { return describe(id, s.description); }
@@ -378,7 +401,9 @@ Element makeToggle(std::string_view id, const Setting& s, SettingKey key) {
     if (!raw) return nullptr;
     // BooleanComponent: +0x1e0 unique_ptr<IBooleanDataProvider>, +0x1e8 std::function<vector<
     // BooleanConfirmationRequest>()> (the query invokes it unconditionally: an empty std::function throws)
-    *at<ProviderBase*>(raw, kDerived) = new BoolProvider(std::move(key));
+    auto* provider                    = new BoolProvider(std::move(key));
+    *at<ProviderBase*>(raw, kDerived) = provider;
+    wireChangeListener(raw, provider);
     new (at<void>(raw, kDerived + 0x08)) std::function<std::vector<::Settings::BooleanConfirmationRequest>()>(
         [] { return std::vector<::Settings::BooleanConfirmationRequest>{}; }
     );
@@ -390,8 +415,10 @@ Element makeSlider(std::string_view id, const Setting& s, SettingKey key) {
     if (!raw) return nullptr;
     // NumberComponent<float>: +0x1e0 provider, +0x1e8 float scale, +0x1ec optional<float> step (+0x1f0 engaged),
     // +0x1f8 std::function formatter (left empty)
-    *at<ProviderBase*>(raw, kDerived) = new FloatProvider(std::move(key));
-    *at<float>(raw, kDerived + 0x08)  = 1.0f;
+    auto* provider                    = new FloatProvider(std::move(key));
+    *at<ProviderBase*>(raw, kDerived) = provider;
+    wireChangeListener(raw, provider);
+    *at<float>(raw, kDerived + 0x08) = 1.0f;
     if (s.step > 0) {
         *at<float>(raw, kDerived + 0x0c) = static_cast<float>(s.step);
         *at<bool>(raw, kDerived + 0x10)  = true;
@@ -418,7 +445,9 @@ Element makeTextField(std::string_view id, const Setting& s, SettingKey key) {
     if (!raw) return nullptr;
     // StringComponent: +0x1e0 provider, +0x1e8 optional<string> placeholder, +0x210 optional<int> maxLength,
     // +0x218 optional<function> format validation, +0x260 bool isFormatValid, +0x268 optional<string> fallback
-    *at<ProviderBase*>(raw, kDerived) = new StringProvider(std::move(key));
+    auto* provider                    = new StringProvider(std::move(key));
+    *at<ProviderBase*>(raw, kDerived) = provider;
+    wireChangeListener(raw, provider);
     new (at<void>(raw, kDerived + 0x08)) std::optional<std::string>();
     new (at<void>(raw, kDerived + 0x30)) std::optional<int>(static_cast<int>(s.maxLength));
     new (at<void>(raw, kDerived + 0x38)) std::optional<std::function<std::optional<std::string>(std::string)>>();
