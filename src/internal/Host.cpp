@@ -136,11 +136,12 @@ int hostUnregisterMod(const char* modId) {
 // ---- Hook installation: STUBS. Nothing is hooked yet. ----
 
 void installTier1Hooks() {
-    // TODO(tier1): hook Settings::IRegistry
-    //   Register the "Mods" group, one group per page and the typed settings from model() in the native settings
-    //   registry so the vanilla settingsGroupQuery / settings*Query facets list them; route UpdateSettingsCommand
-    //   writes for our SettingsIds back to the setters in model().
-    logInfo("tier 1 (Settings::IRegistry) hooks are not implemented yet");
+    // The native settings hook (platform/win32/SettingsHook.cpp) is installed by every copy at init; from now on
+    // this copy is the one that injects the Mods page when the game builds its settings registry. Implemented so
+    // far: the "Lever Mods" page under General with one text row per registered mod (info pages). Typed
+    // settings (toggle/slider/dropdown/text/button/banner) are not rendered yet: their component constructors are
+    // not exported (docs/RE-settings-screen.md).
+    logInfo("tier 1: native settings page active (info rows only; typed settings pending)");
 }
 
 void installTier2Hooks() {
@@ -160,7 +161,7 @@ void hostActivate() {
     installTier2Hooks();
 }
 
-std::uint64_t hostFeatures() { return 0; } // grows as the hooks above get implemented
+std::uint64_t hostFeatures() { return LEVER_FEATURE_GLOBAL_SETTINGS | LEVER_FEATURE_INFO_PAGES; } // grows with the hooks
 int           hostIsActivated() { return gActivated.load() ? 1 : 0; }
 
 const LeverHostV1 kHostV1 = [] {

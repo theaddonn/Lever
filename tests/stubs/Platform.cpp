@@ -1,4 +1,4 @@
-// Test double for internal/Platform.h: an in-memory election slot, no events, no logger.
+// Test double for internal/Platform.h: an in-memory election slot, no events, no logger, no game hooks.
 
 #include "TestSupport.h"
 #include "internal/Platform.h"
@@ -11,5 +11,9 @@ void ensureInit() {
 }
 
 void releaseListeners() {}
+
+void installSettingsHook() {}
+
+void uninstallSettingsHook() {}
 
 } // namespace lever::detail::platform

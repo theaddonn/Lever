@@ -117,9 +117,35 @@ xmake -P . -y && xmake run -P . lever_tests
 | `src/platform/win32/` | the Windows implementations of those seams (named file mapping, LeviLamina events and logger) |
 | `tests/` | host unit tests (doctest) |
 
-## Stubbed
+## Tier 1 status (native settings page)
 
-- `installTier1Hooks()` (`TODO(tier1): hook Settings::IRegistry`) and `installTier2Hooks()` (`TODO(tier2): splice hbui bundle`) only log a message.
-- `lever.host.v1` `getFeatures` returns 0 until those exist.
-- Info pages are part of the ABI contract (mod info is registered) but nothing renders them yet.
-- The election is triggered by the first level join only.
+Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp` (evidence in `docs/RE-settings-screen.md`):
+
+- Every copy hooks `Settings::RegistryBuilder::buildDefaultSettingsRegistry` (exported) at init. The game builds its
+  settings registry lazily on the first settings access, so the hook runs before any settings screen exists. Inside
+  the hook the election runs if it has not yet (the settings screen can open from the main menu before a level
+  join), and only the elected host injects; the other copies' hooks pass through.
+- Injection: the `settings-general-group` factory (the "General" nav section) is wrapped to append a
+  `GroupInfoComponent("lever-mods", "Lever Mods", ...)`, and a `lever-mods` factory is registered that builds the
+  page: one `TextComponent` per registered mod (display name, version, description/author), or a placeholder row.
+- Component elements are built in game-sized raw storage (0x3d0 bytes, alternative index at +0x3c8) from the
+  game's allocator with the exported `$ctor`s, because the SDK's component types have the wrong size.
+- `getFeatures` reports `LEVER_FEATURE_GLOBAL_SETTINGS | LEVER_FEATURE_INFO_PAGES`.
+
+Not yet: typed settings (toggle/slider/dropdown/text field/button/banner) are registered in the model but not
+rendered: `BooleanComponent`, `NumberComponent<T>` and `StringComponent` have no exported constructors (signature
+scan or the `FactoryUtil::addBoolean` + provider swap workaround, see the RE notes). Localisation is untested:
+names are passed as literal strings on the assumption that a missing key is shown verbatim. Registrations made
+after the registry was built are only picked up when the game rebuilds it (no `refresh` call yet). The nav
+icon is the placeholder (the icon map is JS). `installTier2Hooks()` is still a stub.
+
+## In-game check (first run)
+
+Deploy `bin/LeverExample/` (built with `--example=y`) to `mods/LeverExample/`, start the game, open Settings
+from the main menu. Expected: a "Lever Mods" entry at the end of the General section; opening it shows one row
+"Lever Example 0.1.0" with the description. Log lines (LeviLamina console/log, prefix `[Lever]`), in order:
+`settings: hook on Settings::RegistryBuilder::buildDefaultSettingsRegistry installed` (at mod enable),
+`settings: buildDefaultSettingsRegistry hit`, `this copy (Lever 0.1.0) is the host`,
+`settings: wrapped settings-general-group (orig factory ok)`, `settings: registered group lever-mods`,
+`settings: factory lever-mods invoked (1 components)` (when the page opens). If the entry shows a raw key or
+nothing, or the game crashes on opening Settings, send the log and the crash file.

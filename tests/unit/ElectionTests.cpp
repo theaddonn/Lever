@@ -109,7 +109,7 @@ TEST_CASE("client: registrations are buffered until the host is attached, then f
     CHECK(hi.attached);
     CHECK(hi.isThisCopy);
     CHECK(hi.version.minor == 1);
-    CHECK(hi.features == 0);
+    CHECK(hi.features == (LEVER_FEATURE_GLOBAL_SETTINGS | LEVER_FEATURE_INFO_PAGES));
 
     std::lock_guard<std::mutex> lk(host::model().mutex);
     Mod* m = host::model().findMod("mymod");
@@ -180,5 +180,5 @@ TEST_CASE("client: the host interface reports activation") {
     const auto* h = static_cast<const LeverHostV1*>(host::bootstrap()->queryInterface(LEVER_IFACE_HOST_V1, 1));
     REQUIRE(h);
     CHECK(h->size == sizeof(LeverHostV1));
-    CHECK(h->getFeatures() == 0);
+    CHECK(h->getFeatures() == (LEVER_FEATURE_GLOBAL_SETTINGS | LEVER_FEATURE_INFO_PAGES));
 }

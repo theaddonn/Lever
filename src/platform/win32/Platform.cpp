@@ -30,7 +30,10 @@ void logToMod(LogLevel level, const std::string& message) {
 }
 
 struct UnloadGuard {
-    ~UnloadGuard() { election::withdraw(host::bootstrap()); }
+    ~UnloadGuard() {
+        uninstallSettingsHook();
+        election::withdraw(host::bootstrap());
+    }
 };
 
 } // namespace
@@ -41,9 +44,11 @@ void ensureInit() {
     setLogSink(&logToMod);
     if (!election::hasSlot()) election::useSlot(win32::openProcessSlot());
     election::registerSelf(host::bootstrap());
+    installSettingsHook();
     if (!gJoinListener) {
-        // First use of the settings UI is not hookable yet (see Host.cpp), so elect when the player first joins a
-        // level: by then every mod has loaded and enabled, i.e. every copy is in the slot.
+        // The settings hook elects on first use of the settings screen; this covers the case where no settings
+        // screen is opened before a level join. By then every mod has loaded and enabled, i.e. every copy is in
+        // the slot.
         gJoinListener = ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientJoinLevelEvent>(
             [](ll::event::ClientJoinLevelEvent&) { client::attachAndFlush(); }
         );
