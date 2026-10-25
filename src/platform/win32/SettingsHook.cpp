@@ -33,8 +33,10 @@ namespace lever::detail::platform {
 
 namespace {
 
-constexpr const char* kSectionKey = "settings-general-group"; // the "General" nav section (always present)
-constexpr const char* kPageKey    = "lever-mods";             // our page id = our factory key
+constexpr const char* kTabsKey      = "settings-tabs-groups";   // lists the nav sections
+constexpr const char* kGeneralKey   = "settings-general-group"; // fallback: the "General" section
+constexpr const char* kSectionKey   = "settings-lever-group";   // our nav section ("Mods")
+constexpr const char* kOverviewKey  = "lever-mods";             // the overview page (one row per mod)
 
 std::weak_ptr<::Settings::IRegistry> gLastRegistry; // the most recent registry we injected into
 std::mutex                           gRegistryMutex;
@@ -43,8 +45,10 @@ std::string versionString(const lever::Version& v) {
     return std::to_string(v.major) + "." + std::to_string(v.minor) + "." + std::to_string(v.patch);
 }
 
-// The rows of the "Lever Mods" page, built from the host model each time the game materialises the group.
-std::vector<native::Element> buildModsPage() {
+std::string pageKey(const Mod& mod, const Page& page) { return "lever." + mod.info.id + "." + page.id; }
+
+// The rows of the overview page, built from the host model each time the game materialises the group.
+std::vector<native::Element> buildOverview() {
     std::vector<native::Element> out;
     Registry&                    m = host::model();
     std::lock_guard<std::mutex>  lk(m.mutex);
@@ -64,25 +68,90 @@ std::vector<native::Element> buildModsPage() {
     return out;
 }
 
-void injectInto(::Settings::Registry& reg) {
-    // 1. The page entry: append a GroupInfoComponent to the General section's factory result.
-    auto& factories = *reg.mSettingsFactories;
-    auto  it        = factories.find(kSectionKey);
-    if (it == factories.end()) {
-        logWarn(std::string("settings: factory '") + kSectionKey + "' not found; the Mods page has no nav entry");
-    } else {
-        native::Factory orig = std::move(it->second);
-        it->second           = [orig = std::move(orig)]() {
-            std::vector<native::Element> items = orig ? orig() : std::vector<native::Element>{};
-            if (auto e = native::makeGroupInfo(kPageKey, "Lever Mods", std::string("Settings of installed mods")))
-                items.push_back(std::move(e));
-            return items;
-        };
-        logInfo(std::string("settings: wrapped ") + kSectionKey + (orig ? " (orig factory ok)" : " (orig factory EMPTY)"));
+// The rows of one mod page: its settings in registration order.
+std::vector<native::Element> buildPage(std::string modId, std::string pageId) {
+    std::vector<native::Element> out;
+    Registry&                    m = host::model();
+    std::lock_guard<std::mutex>  lk(m.mutex);
+    Page*                        page = m.findPage(modId, pageId);
+    if (!page) {
+        if (auto e = native::makeText("lever." + modId + "." + pageId + ".gone", "This mod is no longer loaded", std::nullopt))
+            out.push_back(std::move(e));
+        return out;
     }
-    // 2. The page itself.
-    reg.registerSettingsFactory(kPageKey, native::Factory(&buildModsPage));
-    logInfo(std::string("settings: registered group ") + kPageKey);
+    int skipped = 0;
+    for (const Setting& s : page->settings) {
+        const std::string id = "lever." + modId + "." + pageId + "." + s.id;
+        if (auto e = native::makeSetting(id, s, native::SettingKey{modId, pageId, s.id})) out.push_back(std::move(e));
+        else ++skipped;
+    }
+    logInfo(
+        "settings: factory " + modId + "." + pageId + " invoked (" + std::to_string(out.size()) + " components"
+        + (skipped ? ", " + std::to_string(skipped) + " unsupported" : "") + ")"
+    );
+    return out;
+}
+
+// The entries of our nav section: the overview page, then every registered page.
+std::vector<native::Element> buildSection() {
+    std::vector<native::Element> out;
+    if (auto e = native::makeGroupInfo(kOverviewKey, "Lever Mods", std::string("Installed mods")))
+        out.push_back(std::move(e));
+    Registry&                   m = host::model();
+    std::lock_guard<std::mutex> lk(m.mutex);
+    for (const Mod& mod : m.mods)
+        for (const Page& page : mod.pages) {
+            if (!(page.surfaces & LEVER_SURFACE_GLOBAL_SETTINGS)) continue;
+            const std::string title = mod.pages.size() == 1 ? mod.info.displayName : mod.info.displayName + ": " + page.title;
+            if (auto e = native::makeGroupInfo(pageKey(mod, page), title, std::nullopt)) out.push_back(std::move(e));
+        }
+    return out;
+}
+
+// Appends GroupInfo(key, name) to whatever factory `wrappedKey` produced.
+bool appendEntry(::Settings::Registry& reg, const char* wrappedKey, std::string key, std::string name, std::optional<std::string> desc) {
+    auto& factories = *reg.mSettingsFactories;
+    auto  it        = factories.find(wrappedKey);
+    if (it == factories.end()) return false;
+    native::Factory orig = std::move(it->second);
+    it->second           = [orig = std::move(orig), key, name, desc]() {
+        std::vector<native::Element> items = orig ? orig() : std::vector<native::Element>{};
+        if (auto e = native::makeGroupInfo(key, name, desc)) items.push_back(std::move(e));
+        return items;
+    };
+    logInfo(std::string("settings: wrapped ") + wrappedKey + (orig ? " (orig factory ok)" : " (orig factory EMPTY)"));
+    return true;
+}
+
+void injectInto(::Settings::Registry& reg) {
+    // 1. A "Mods" section in the nav, or (fallback) an entry at the end of General.
+    if (appendEntry(reg, kTabsKey, kSectionKey, "Mods", std::nullopt)) {
+        reg.registerSettingsFactory(kSectionKey, native::Factory(&buildSection));
+    } else {
+        logWarn(std::string("settings: factory '") + kTabsKey + "' not found; falling back to the General section");
+        if (!appendEntry(reg, kGeneralKey, kOverviewKey, "Lever Mods", std::string("Settings of installed mods")))
+            logWarn(std::string("settings: factory '") + kGeneralKey + "' not found; the Mods page has no nav entry");
+    }
+    // 2. The overview page and one factory per registered page.
+    reg.registerSettingsFactory(kOverviewKey, native::Factory(&buildOverview));
+    int pages = 0;
+    {
+        Registry&                   m = host::model();
+        std::lock_guard<std::mutex> lk(m.mutex);
+        for (const Mod& mod : m.mods)
+            for (const Page& page : mod.pages) {
+                std::string modId = mod.info.id, pageId = page.id;
+                reg.registerSettingsFactory(
+                    pageKey(mod, page),
+                    native::Factory([modId, pageId] { return buildPage(modId, pageId); })
+                );
+                ++pages;
+            }
+    }
+    logInfo(
+        std::string("settings: registered group ") + kOverviewKey + " and " + std::to_string(pages) + " mod page(s); toggles "
+        + (native::togglesSupported() ? "native" : "as dropdowns")
+    );
 }
 
 void onRegistryBuilt(const std::shared_ptr<::Settings::IRegistry>& reg) {

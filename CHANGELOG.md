@@ -16,5 +16,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - In-process model of mods, pages and settings, and the host-side table implementation.
 - Example client mod (`--example=y`).
 - Design notes in `docs/DESIGN.md` and static RE notes on the Ore UI settings screen in `docs/RE-settings-screen.md`.
-- Tier 1 hook: `Settings::RegistryBuilder::buildDefaultSettingsRegistry` is hooked and the host copy adds a "Lever Mods" page under the General section of the settings screen with one text row per registered mod. Typed settings are not rendered yet.
+- Tier 1: `Settings::RegistryBuilder::buildDefaultSettingsRegistry` is hooked; the host copy adds a "Mods" nav section with an overview page and one page per registered mod page, rendering toggles, sliders, dropdowns, text fields, buttons, banners and headers with the vanilla widgets (`docs/RE-components.md`).
 - `manifest.json` template for the example mod packer.

@@ -8,7 +8,7 @@ The cross-copy ABI is built for long-term backward compatibility: a frozen boots
 
 ## Status
 
-**Pre-alpha.** The consumer API, the C ABI, host election and the in-process model are in place. The first native hook adds a "Lever Mods" page (one info row per registered mod) to the vanilla Ore UI settings screen; typed settings are not rendered yet and nothing has been verified in game so far. See [docs/DESIGN.md](docs/DESIGN.md) for the plan and the open questions.
+**Pre-alpha.** The consumer API, the C ABI, host election and the in-process model are in place. The native hook adds a "Mods" section to the vanilla Ore UI settings screen with one page per registered mod page, rendering toggles, sliders, dropdowns, text fields, buttons and banners with the vanilla widgets. The overview page is verified in game; the widgets are not yet. See [docs/DESIGN.md](docs/DESIGN.md) for the plan and the open questions.
 
 ## Compatibility
 

@@ -119,27 +119,44 @@ xmake -P . -y && xmake run -P . lever_tests
 
 ## Tier 1 status (native settings page)
 
-Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp` (evidence in `docs/RE-settings-screen.md`):
+Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp` (evidence in
+`docs/RE-settings-screen.md` and `docs/RE-components.md`):
 
 - Every copy hooks `Settings::RegistryBuilder::buildDefaultSettingsRegistry` (exported) at init. The game builds its
   settings registry lazily on the first settings access, so the hook runs before any settings screen exists. Inside
-  the hook the election runs if it has not yet (the settings screen can open from the main menu before a level
-  join), and only the elected host injects; the other copies' hooks pass through.
-- Injection: the `settings-general-group` factory (the "General" nav section) is wrapped to append a
-  `GroupInfoComponent("lever-mods", "Lever Mods", ...)`, and a `lever-mods` factory is registered that builds the
-  page: one `TextComponent` per registered mod (display name, version, description/author), or a placeholder row.
-- Component elements are built in game-sized raw storage (0x3d0 bytes, alternative index at +0x3c8) from the
-  game's allocator with the exported `$ctor`s, because the SDK's component types have the wrong size.
+  the hook the election runs if it has not yet, and only the elected host injects; the other copies pass through.
+- Nav: the `settings-tabs-groups` factory (the list of nav sections) is wrapped to append a "Mods" section
+  (`settings-lever-group`), whose factory lists the overview page `lever-mods` and one entry per registered page
+  (`lever.<mod>.<page>`, titled with the mod's display name, or "Mod: Page" when a mod has several pages). Fallback
+  when the tabs factory is missing: the overview entry is appended to the General section.
+- Pages: the overview page has one text row per registered mod; each mod page is built from the host model on
+  demand: toggle (BooleanComponent), slider (NumberComponent<float>), dropdown (OptionComponent), text field
+  (StringComponent), button (ActionComponent), banner (BannerComponent), header (TextComponent).
+- Component elements are built in game-sized raw storage (0x3d0 bytes, index at +0x3c8) from the game's allocator.
+  Text/GroupInfo/Option/Action use their exported constructors; Boolean/Number/String/Banner are hand built: base via
+  `TextComponent::$ctor`, then the real vtable, type and derived fields. Data providers are our own classes with the
+  game's vtable order; they resolve the setting in the host model on every call, so a mod that unregistered is never
+  called back. The Boolean vtable is verified at runtime against a real OptionComponent; if the check fails, toggles
+  render as two-entry dropdowns.
 - `getFeatures` reports `LEVER_FEATURE_GLOBAL_SETTINGS | LEVER_FEATURE_INFO_PAGES`.
 
-Not yet: typed settings (toggle/slider/dropdown/text field/button/banner) are registered in the model but not
-rendered: `BooleanComponent`, `NumberComponent<T>` and `StringComponent` have no exported constructors (signature
-scan or the `FactoryUtil::addBoolean` + provider swap workaround, see the RE notes). Localisation is untested:
-names are passed as literal strings on the assumption that a missing key is shown verbatim. Registrations made
-after the registry was built are only picked up when the game rebuilds it (no `refresh` call yet). The nav
-icon is the placeholder (the icon map is JS). `installTier2Hooks()` is still a stub.
+Not yet: registrations made after the registry was built are only picked up when the game rebuilds it (no
+`refresh` call); external value changes are not pushed to the UI (`setChangeListener` is stored but unused); the nav
+icon is the placeholder (the icon map is JS); labels are literal strings (a localisation key passed as the label is
+resolved by the game, so mods can ship keys through a resource pack); `installTier2Hooks()` is still a stub.
 
-## In-game check (first run)
+## In-game check (widgets)
+
+Deploy `bin/LeverExample/` (built with `--example=y`) to `mods/LeverExample/`, start the game, open Settings from
+the main menu. Expected: a "Mods" section at the bottom of the nav with "Lever Mods" (overview) and "Lever Example"
+entries. The example page shows a header, a toggle, a slider (0..1, step 0.05), a dropdown (Low/Medium/High), a
+text field, a "Reset" button and a warning banner; changing a value and reopening the page keeps it. Log lines in
+`mods/LeverExample/logs/lever.log`: `components: OptionComponent vtable ... distinct, native toggles` (or the
+fallback text), `settings: registered group lever-mods and 1 mod page(s); toggles native`,
+`settings: factory lever_example.main invoked (7 components)`. A crash on opening the page or on leaving the
+settings screen (component destruction) is the thing to report, with the crash file.
+
+## In-game check (first run, done 2026-10-25: passed)
 
 Deploy `bin/LeverExample/` (built with `--example=y`) to `mods/LeverExample/`, start the game, open Settings
 from the main menu. Expected: a "Lever Mods" entry at the end of the General section; opening it shows one row
