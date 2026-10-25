@@ -136,8 +136,9 @@ Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp` (e
   Text/GroupInfo/Option/Action use their exported constructors; Boolean/Number/String/Banner are hand built: base via
   `TextComponent::$ctor`, then the real vtable, type and derived fields. Data providers are our own classes with the
   game's vtable order; they resolve the setting in the host model on every call, so a mod that unregistered is never
-  called back. The Boolean vtable is verified at runtime against a real OptionComponent; if the check fails, toggles
-  render as two-entry dropdowns.
+  called back. The Boolean vtable is discovered at runtime from a probe element built by the exported `FactoryUtil::addBoolean`;
+  if that fails, toggles render as two-entry dropdowns. Descriptions are registered as runtime translations because
+  the game drops a description whose I18n lookup returns the input unchanged.
 - `getFeatures` reports `LEVER_FEATURE_GLOBAL_SETTINGS | LEVER_FEATURE_INFO_PAGES`.
 
 Not yet: registrations made after the registry was built are only picked up when the game rebuilds it (no

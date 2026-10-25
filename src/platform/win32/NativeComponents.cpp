@@ -4,10 +4,16 @@
 #include "internal/Log.h"
 
 #include "ll/api/memory/Memory.h"
+#include "mc/client/options/IOptionRegistry.h"
 #include "mc/client/settings/BannerType.h"
+#include "mc/client/settings/FactoryUtil.h"
+#include "mc/options/option_types/Option.h"
+#include "mc/options/option_types/OptionID.h"
+#include "mc/options/option_types/OptionType.h"
 #include "mc/client/settings/LocStringData.h"
 #include "mc/client/settings/OptionData.h"
 #include "mc/deps/core/memory/IMemoryAllocator.h"
+#include "mc/locale/I18n.h"
 
 #include <windows.h>
 
@@ -17,6 +23,7 @@
 #include <functional>
 #include <mutex>
 #include <new>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -40,10 +47,30 @@ enum SettingsTypeValue : int { kTypeNumber = 0, kTypeBoolean = 1, kTypeString = 
 constexpr std::uintptr_t kVtString      = 0xe8bfb90;
 constexpr std::uintptr_t kVtBanner      = 0xe8bfc10;
 constexpr std::uintptr_t kVtNumberFloat = 0xe7873c0;
-// The one vtable whose destructor has the Boolean/Option shape (provider at +0x1e0, std::function at +0x1e8).
-// Boolean and Option cannot be told apart statically; booleanVtable() resolves it at runtime against a real
-// OptionComponent built with the exported constructor.
-constexpr std::uintptr_t kVtBooleanCandidate = 0xe8bfb70;
+// The BooleanComponent vtable is not identifiable statically (the only vtable with its destructor shape turned out
+// to be OptionComponent's). booleanVtable() discovers it at runtime from a throw-away element built by the exported
+// Settings::FactoryUtil::addBoolean with a vanilla boolean OptionID and our own provider.
+::IOptionRegistry* gOptions = nullptr;
+
+// Descriptions are resolved through I18n by the settings queries and DROPPED when the lookup returns the input
+// unchanged (a missing key comes back as itself; docs/RE-components.md), while names are shown verbatim. So every
+// description is registered as a runtime translation under a key derived from the component id, and the key is
+// what the component carries. Pending entries are flushed into I18n after each factory run.
+std::mutex                                   gTranslationsMutex;
+std::unordered_map<std::string, std::string> gTranslations;        // everything registered so far (re-appended)
+bool                                         gTranslationsDirty = false;
+
+std::optional<std::string> describe(std::string_view id, const std::string& text) {
+    if (text.empty()) return std::nullopt;
+    std::string key = std::string(id) + ".description";
+    std::lock_guard<std::mutex> lk(gTranslationsMutex);
+    auto it = gTranslations.find(key);
+    if (it == gTranslations.end() || it->second != text) {
+        gTranslations[key]  = text;
+        gTranslationsDirty = true;
+    }
+    return key;
+}
 
 std::uintptr_t imageBase() {
     static const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
@@ -104,6 +131,12 @@ struct ProviderBase {
 
     SettingKey key;
 
+    /// Vanilla providers call the listener after a write; the queries re-read the value on it. Without this the
+    /// screen shows the old value again.
+    void notify() const {
+        if (listener) listener();
+    }
+
     /// Runs fn(setting) under the host model lock if the setting still exists.
     template <class Fn>
     void with(Fn&& fn) const {
@@ -126,6 +159,7 @@ struct BoolProvider : ProviderBase {
     }
     virtual void setValue(bool value) {
         with([&](Setting& s) { if (s.setBool) s.setBool(value); });
+        notify();
     }
     virtual bool flush() { return false; }
 };
@@ -141,6 +175,7 @@ struct FloatProvider : ProviderBase {
     }
     virtual void setValue(float value) {
         with([&](Setting& s) { if (s.setNumber) s.setNumber(static_cast<double>(value)); });
+        notify();
     }
     virtual float getMin() const {
         double v = 0;
@@ -168,6 +203,7 @@ struct StringProvider : ProviderBase {
     }
     virtual void setValue(std::string_view value) {
         with([&](Setting& s) { if (s.setString) s.setString(std::string(value)); });
+        notify();
     }
     virtual void commitValue() {}
     virtual bool flush() { return false; }
@@ -200,11 +236,18 @@ struct OptionsProvider : ProviderBase {
     }
     virtual int getValue() const {
         int v = 0;
-        with([&](Setting& s) { if (s.getIndex) v = s.getIndex(); });
+        with([&](Setting& s) {
+            if (asToggle) v = s.getBool && s.getBool() ? 1 : 0;
+            else if (s.getIndex) v = s.getIndex();
+        });
         return v;
     }
     virtual void setValue(int index) {
-        with([&](Setting& s) { if (s.setIndex) s.setIndex(index); });
+        with([&](Setting& s) {
+            if (asToggle) { if (s.setBool) s.setBool(index != 0); }
+            else if (s.setIndex) s.setIndex(index);
+        });
+        notify();
     }
     virtual std::optional<LabelVariant> const& getInfo() const {
         static const std::optional<LabelVariant> none;
@@ -213,6 +256,7 @@ struct OptionsProvider : ProviderBase {
     virtual bool flush() { return false; }
 
     std::vector<OptionDataRaw> options;
+    bool                       asToggle = false; // maps a bool setting onto Off/On
 };
 
 // IActionDataProvider: + flush
@@ -231,44 +275,74 @@ template <class T>
     return ::std::unique_ptr<T>(reinterpret_cast<T*>(p));
 }
 
-/// Resolves the BooleanComponent vtable (0 = unknown on this build). Builds a throw-away OptionComponent with the
-/// exported constructor, reads its vtable and accepts the static candidate only if it is a different class.
+/// Resolves the BooleanComponent vtable (0 = unknown on this build): builds a throw-away BooleanComponent through
+/// the exported FactoryUtil::addBoolean (needs any valid vanilla boolean OptionID and the option registry), reads
+/// its vtable, destroys it in place and frees the storage.
 std::uintptr_t booleanVtable() {
-    static const std::uintptr_t resolved = [] () -> std::uintptr_t {
-        void* raw = allocateElement();
-        if (!raw) return 0;
-        auto* provider = new OptionsProvider(SettingKey{}, {});
-        reinterpret_cast<::Settings::OptionComponent*>(raw)->$ctor(
+    static const std::uintptr_t resolved = []() -> std::uintptr_t {
+        if (!gOptions) {
+            logWarn("components: no option registry; toggles fall back to dropdowns");
+            return 0;
+        }
+        std::optional<::OptionID> found;
+        for (int i = 0; i < 4096 && !found; ++i) {
+            const auto id = static_cast<::OptionID>(i);
+            if (!gOptions->isValidOption(id)) continue;
+            std::optional<::Option*> o = gOptions->getIfValid(id);
+            if (!o || !*o || !(*o)->mImpl) continue;
+            if ((*o)->mImpl->mOptionType == ::OptionType::Boolean) found = id;
+        }
+        if (!found) {
+            logWarn("components: no vanilla boolean option found; toggles fall back to dropdowns");
+            return 0;
+        }
+        std::vector<Element> tmp;
+        ::Settings::FactoryUtil::addBoolean(
+            tmp,
             "lever.probe",
-            "probe",
-            std::nullopt,
-            asSdk<::Settings::IOptionsDataProvider>(provider)
+            *found,
+            *gOptions,
+            std::optional<std::unique_ptr<::Settings::IBooleanDataProvider>>(
+                asSdk<::Settings::IBooleanDataProvider>(new BoolProvider(SettingKey{}))
+            )
         );
-        const std::uintptr_t optionVt = *at<std::uintptr_t>(raw, 0);
-        using DeletingDtor            = void* (*)(void*, unsigned);
-        reinterpret_cast<DeletingDtor*>(optionVt)[0](raw, 0); // destroy in place (flag 0: no free)
+        if (tmp.empty() || !tmp.front()) {
+            logWarn("components: addBoolean produced no element; toggles fall back to dropdowns");
+            return 0;
+        }
+        void* raw = tmp.front().release();
+        for (auto& e : tmp) (void)e.release(); // never run the SDK deleter on game elements
+        const unsigned char  index = *at<unsigned char>(raw, kIndexOffset);
+        const int            type  = *at<int>(raw, kTypeOffset);
+        const std::uintptr_t vt    = *at<std::uintptr_t>(raw, 0);
+        using DeletingDtor         = void* (*)(void*, unsigned);
+        reinterpret_cast<DeletingDtor*>(vt)[0](raw, 0); // destroy in place (flag 0: no free)
         ::ll::memory::getDefaultAllocator()._release(raw);
-        const std::uintptr_t candidate = imageBase() + kVtBooleanCandidate;
-        char                 buf[160];
+        char buf[200];
         std::snprintf(
             buf,
             sizeof buf,
-            "components: OptionComponent vtable +0x%llx, Boolean candidate +0x%llx -> %s",
-            static_cast<unsigned long long>(optionVt - imageBase()),
-            static_cast<unsigned long long>(kVtBooleanCandidate),
-            optionVt == candidate ? "same class, toggles fall back to dropdowns" : "distinct, native toggles"
+            "components: addBoolean probe with OptionID %d -> variant index %u, type %d, vtable +0x%llx -> %s",
+            static_cast<int>(*found),
+            index,
+            type,
+            static_cast<unsigned long long>(vt - imageBase()),
+            index == kBoolean ? "native toggles" : "unexpected, toggles fall back to dropdowns"
         );
         logInfo(buf);
-        return optionVt == candidate ? 0 : candidate;
+        return index == kBoolean ? vt - imageBase() : 0;
     }();
     return resolved;
 }
 
 } // namespace
 
+void setOptionRegistry(::IOptionRegistry* options) { gOptions = options; }
+
 Element makeText(std::string_view id, std::string_view name, std::optional<std::string> description) {
     void* raw = allocateElement();
     if (!raw) return nullptr;
+    if (description) description = describe(id, *description);
     reinterpret_cast<::Settings::TextComponent*>(raw)->$ctor(id, name, std::move(description));
     return finish(raw, kText);
 }
@@ -276,19 +350,30 @@ Element makeText(std::string_view id, std::string_view name, std::optional<std::
 Element makeGroupInfo(std::string_view id, std::string_view name, std::optional<std::string> description) {
     void* raw = allocateElement();
     if (!raw) return nullptr;
+    if (description) description = describe(id, *description);
     reinterpret_cast<::Settings::GroupInfoComponent*>(raw)->$ctor(id, name, std::move(description));
     return finish(raw, kGroupInfo);
 }
 
 bool togglesSupported() { return booleanVtable() != 0; }
 
-std::optional<std::string> descOf(const Setting& s) {
-    return s.description.empty() ? std::nullopt : std::optional(s.description);
+void flushTranslations() {
+    std::unordered_map<std::string, std::string> copy;
+    {
+        std::lock_guard<std::mutex> lk(gTranslationsMutex);
+        if (!gTranslationsDirty) return;
+        gTranslationsDirty = false;
+        copy               = gTranslations;
+    }
+    ::getI18n().appendAdditionalTranslations(copy, "");
+    logInfo("components: registered " + std::to_string(copy.size()) + " runtime translation(s)");
 }
+
+std::optional<std::string> descOf(std::string_view id, const Setting& s) { return describe(id, s.description); }
 
 Element makeToggle(std::string_view id, const Setting& s, SettingKey key) {
     if (!togglesSupported()) return nullptr;
-    void* raw = beginHandBuilt(id, s.label, descOf(s), kTypeBoolean, booleanVtable());
+    void* raw = beginHandBuilt(id, s.label, descOf(id, s), kTypeBoolean, booleanVtable());
     if (!raw) return nullptr;
     // BooleanComponent: +0x1e0 unique_ptr<IBooleanDataProvider>, +0x1e8 std::function (confirmation requests,
     // left empty = zero bytes)
@@ -297,7 +382,7 @@ Element makeToggle(std::string_view id, const Setting& s, SettingKey key) {
 }
 
 Element makeSlider(std::string_view id, const Setting& s, SettingKey key) {
-    void* raw = beginHandBuilt(id, s.label, descOf(s), kTypeNumber, kVtNumberFloat);
+    void* raw = beginHandBuilt(id, s.label, descOf(id, s), kTypeNumber, kVtNumberFloat);
     if (!raw) return nullptr;
     // NumberComponent<float>: +0x1e0 provider, +0x1e8 float scale, +0x1ec optional<float> step (+0x1f0 engaged),
     // +0x1f8 std::function formatter (left empty)
@@ -310,21 +395,22 @@ Element makeSlider(std::string_view id, const Setting& s, SettingKey key) {
     return finish(raw, kNumberFloat);
 }
 
-Element makeDropdown(std::string_view id, const Setting& s, SettingKey key) {
+Element makeDropdown(std::string_view id, const Setting& s, SettingKey key, bool asToggle) {
     void* raw = allocateElement();
     if (!raw) return nullptr;
-    auto* provider = new OptionsProvider(std::move(key), s.options);
+    auto* provider     = new OptionsProvider(std::move(key), s.options);
+    provider->asToggle = asToggle;
     reinterpret_cast<::Settings::OptionComponent*>(raw)->$ctor(
         id,
         s.label,
-        descOf(s),
+        descOf(id, s),
         asSdk<::Settings::IOptionsDataProvider>(provider)
     );
     return finish(raw, kOption);
 }
 
 Element makeTextField(std::string_view id, const Setting& s, SettingKey key) {
-    void* raw = beginHandBuilt(id, s.label, descOf(s), kTypeString, kVtString);
+    void* raw = beginHandBuilt(id, s.label, descOf(id, s), kTypeString, kVtString);
     if (!raw) return nullptr;
     // StringComponent: +0x1e0 provider, +0x1e8 optional<string> placeholder, +0x210 optional<int> maxLength,
     // +0x218 optional<function> format validation, +0x260 bool isFormatValid, +0x268 optional<string> fallback
@@ -355,7 +441,7 @@ Element makeButton(std::string_view id, const Setting& s, SettingKey key) {
     reinterpret_cast<::Settings::ActionComponent*>(raw)->$ctor(
         id,
         s.label,
-        descOf(s),
+        descOf(id, s),
         s.label, // action label (the button text)
         std::function<void(std::function<void(bool)>)>(std::move(onClick)),
         std::nullopt,
@@ -366,7 +452,7 @@ Element makeButton(std::string_view id, const Setting& s, SettingKey key) {
 }
 
 Element makeBanner(std::string_view id, const Setting& s) {
-    void* raw = beginHandBuilt(id, s.label, descOf(s), kTypeBanner, kVtBanner);
+    void* raw = beginHandBuilt(id, s.label, descOf(id, s), kTypeBanner, kVtBanner);
     if (!raw) return nullptr;
     // BannerComponent: +0x1e0 BannerType, +0x1e8 optional<BannerCta> (empty), +0x250 optional<ConfirmationRequest>
     // (empty), +0x2d8 unique_ptr<IDataProvider>
@@ -384,18 +470,16 @@ Element makeSetting(std::string_view id, const Setting& s, SettingKey key) {
         if (togglesSupported()) return makeToggle(id, s, std::move(key));
         {
             // fallback: a two-entry dropdown bound to the bool callbacks
-            Setting d    = s;
-            d.options    = {"Off", "On"};
-            d.getIndex   = s.getBool ? std::function<int()>([g = s.getBool] { return g() ? 1 : 0; }) : nullptr;
-            d.setIndex   = s.setBool ? std::function<void(int)>([st = s.setBool](int v) { st(v != 0); }) : nullptr;
-            return makeDropdown(id, d, std::move(key));
+            Setting d = s;
+            d.options = {"Off", "On"};
+            return makeDropdown(id, d, std::move(key), /*asToggle=*/true);
         }
     case LEVER_KIND_SLIDER: return makeSlider(id, s, std::move(key));
     case LEVER_KIND_DROPDOWN: return makeDropdown(id, s, std::move(key));
     case LEVER_KIND_TEXT_FIELD: return makeTextField(id, s, std::move(key));
     case LEVER_KIND_BUTTON: return makeButton(id, s, std::move(key));
     case LEVER_KIND_BANNER: return makeBanner(id, s);
-    case LEVER_KIND_HEADER: return makeText(id, s.label, descOf(s));
+    case LEVER_KIND_HEADER: return makeText(id, s.label, descOf(id, s));
     }
     return nullptr;
 }

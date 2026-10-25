@@ -21,6 +21,7 @@
 #include "internal/Model.h"
 
 // All alternatives of the component variant must be complete types wherever std::vector<Element> is destroyed.
+#include "mc/client/options/IOptionRegistry.h"
 #include "mc/client/settings/ActionComponent.h"
 #include "mc/client/settings/BannerComponent.h"
 #include "mc/client/settings/BooleanComponent.h"
@@ -57,13 +58,19 @@ Element makeText(std::string_view id, std::string_view name, std::optional<std::
 Element makeGroupInfo(std::string_view id, std::string_view name, std::optional<std::string> description);
 Element makeToggle(std::string_view id, const Setting& s, SettingKey key);
 Element makeSlider(std::string_view id, const Setting& s, SettingKey key);
-Element makeDropdown(std::string_view id, const Setting& s, SettingKey key);
+Element makeDropdown(std::string_view id, const Setting& s, SettingKey key, bool asToggle = false);
 Element makeTextField(std::string_view id, const Setting& s, SettingKey key);
 Element makeButton(std::string_view id, const Setting& s, SettingKey key);
 Element makeBanner(std::string_view id, const Setting& s);
 
 /// Builds the element for a model setting (nullptr when the kind cannot be rendered on this game version).
 Element makeSetting(std::string_view id, const Setting& s, SettingKey key);
+
+/// The game's option registry (from the builder context); needed once to discover the Boolean vtable.
+void setOptionRegistry(::IOptionRegistry* options);
+
+/// Pushes the descriptions registered since the last call into the game's I18n (call after a factory run).
+void flushTranslations();
 
 /// true when hand-built toggles are available (the BooleanComponent vtable is known for this build).
 bool togglesSupported();

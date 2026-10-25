@@ -65,6 +65,7 @@ std::vector<native::Element> buildOverview() {
             out.push_back(std::move(e));
     }
     logInfo("settings: factory lever-mods invoked (" + std::to_string(out.size()) + " components)");
+    native::flushTranslations();
     return out;
 }
 
@@ -89,6 +90,7 @@ std::vector<native::Element> buildPage(std::string modId, std::string pageId) {
         "settings: factory " + modId + "." + pageId + " invoked (" + std::to_string(out.size()) + " components"
         + (skipped ? ", " + std::to_string(skipped) + " unsupported" : "") + ")"
     );
+    native::flushTranslations();
     return out;
 }
 
@@ -105,6 +107,7 @@ std::vector<native::Element> buildSection() {
             const std::string title = mod.pages.size() == 1 ? mod.info.displayName : mod.info.displayName + ": " + page.title;
             if (auto e = native::makeGroupInfo(pageKey(mod, page), title, std::nullopt)) out.push_back(std::move(e));
         }
+    native::flushTranslations();
     return out;
 }
 
@@ -154,9 +157,13 @@ void injectInto(::Settings::Registry& reg) {
     );
 }
 
-void onRegistryBuilt(const std::shared_ptr<::Settings::IRegistry>& reg) {
+void onRegistryBuilt(
+    const std::shared_ptr<::Settings::IRegistry>&                       reg,
+    const std::shared_ptr<::Settings::RegistryBuilder::IBuilderContext>& context
+) {
     logInfo("settings: buildDefaultSettingsRegistry hit");
     if (!reg) return;
+    if (context) native::setOptionRegistry(&context->getOptions());
     // The settings screen can open from the main menu before any level join: make sure the election ran. Every
     // mod has loaded and enabled by the time a screen exists, so all copies are in the slot.
     client::attachAndFlush();
@@ -179,9 +186,9 @@ LL_STATIC_HOOK(
     ::std::shared_ptr<::Settings::IRegistry>,
     ::std::shared_ptr<::Settings::RegistryBuilder::IBuilderContext> context
 ) {
-    auto reg = origin(std::move(context));
+    auto reg = origin(context);
     try {
-        onRegistryBuilt(reg);
+        onRegistryBuilt(reg, context);
     } catch (...) {
         logWarn("settings: exception while injecting into the settings registry; page skipped");
     }
