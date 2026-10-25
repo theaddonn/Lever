@@ -6,6 +6,7 @@
 #include "ll/api/memory/Memory.h"
 #include "mc/client/options/IOptionRegistry.h"
 #include "mc/client/settings/BannerType.h"
+#include "mc/client/settings/BooleanConfirmationRequest.h"
 #include "mc/client/settings/FactoryUtil.h"
 #include "mc/options/option_types/Option.h"
 #include "mc/options/option_types/OptionID.h"
@@ -375,9 +376,12 @@ Element makeToggle(std::string_view id, const Setting& s, SettingKey key) {
     if (!togglesSupported()) return nullptr;
     void* raw = beginHandBuilt(id, s.label, descOf(id, s), kTypeBoolean, booleanVtable());
     if (!raw) return nullptr;
-    // BooleanComponent: +0x1e0 unique_ptr<IBooleanDataProvider>, +0x1e8 std::function (confirmation requests,
-    // left empty = zero bytes)
+    // BooleanComponent: +0x1e0 unique_ptr<IBooleanDataProvider>, +0x1e8 std::function<vector<
+    // BooleanConfirmationRequest>()> (the query invokes it unconditionally: an empty std::function throws)
     *at<ProviderBase*>(raw, kDerived) = new BoolProvider(std::move(key));
+    new (at<void>(raw, kDerived + 0x08)) std::function<std::vector<::Settings::BooleanConfirmationRequest>()>(
+        [] { return std::vector<::Settings::BooleanConfirmationRequest>{}; }
+    );
     return finish(raw, kBoolean);
 }
 
