@@ -26,6 +26,7 @@
 #include <functional>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -214,6 +215,8 @@ struct FloatProvider : ProviderBase {
     virtual bool reserved0() { return false; }
     virtual bool reserved1() { return false; }
     virtual bool reserved2() { return false; }
+    virtual bool reserved3() { return false; }
+    virtual bool reserved4() { return false; }
 };
 
 // IStringDataProvider: + getValue, setValue(string_view), commitValue, flush
@@ -415,32 +418,48 @@ Element makeToggle(std::string_view id, const Setting& s, SettingKey key) {
     return finish(raw, kBoolean);
 }
 
+// The slider's JavaScript builds its knob positions as floor((max - min) / step) + 1 values from the float32
+// step converted to double, so a step whose float32 is slightly above the true value (0.05f = 0.05000000074...)
+// loses one position and the knob rests ~3 % right of the value. Nudge the float32 step down until the count
+// comes out as intended.
+float uiStep(double min, double max, double step) {
+    float fmin = static_cast<float>(min), fmax = static_cast<float>(max), fs = static_cast<float>(step);
+    if (!(step > 0) || !(max > min) || !(fs > 0)) return fs;
+    double want = std::round((max - min) / step);
+    double span = static_cast<double>(fmax) - static_cast<double>(fmin);
+    for (int i = 0; i < 16 && std::floor(span / static_cast<double>(fs)) < want; ++i)
+        fs = std::nextafter(fs, 0.0f);
+    return fs;
+}
+
 Element makeSlider(std::string_view id, const Setting& s, SettingKey key) {
     void* raw = beginHandBuilt(id, s.label, descOf(id, s), kTypeNumber, kVtNumberFloat);
     if (!raw) return nullptr;
     // NumberComponent<float>: +0x1e0 provider, +0x1e8 float scale, +0x1ec optional<float> step (+0x1f0 engaged),
-    // +0x1f8 std::function formatter (left empty)
+    // +0x1f8 std::function formatter
     auto* provider                    = new FloatProvider(std::move(key));
     *at<ProviderBase*>(raw, kDerived) = provider;
     wireChangeListener(raw, provider);
     *at<float>(raw, kDerived + 0x08) = 1.0f;
     if (s.step > 0) {
-        *at<float>(raw, kDerived + 0x0c) = static_cast<float>(s.step);
+        *at<float>(raw, kDerived + 0x0c) = uiStep(s.min, s.max, s.step);
         *at<bool>(raw, kDerived + 0x10)  = true;
     }
-    // Value text formatter at +0x1f8: the query calls it as (sret string, value, <two more floats>) with the value
-    // already scaled and snapped to the step (SettingsNumberQuery 0xbb049a6); without one the UI prints the raw
-    // float32 through JavaScript (0.9000000357...). Decimals follow the step: 0.05 -> 2, 1 -> 0, none -> 0.
+    // Value text formatter at +0x1f8: SettingsNumberQuery (0xbb049a6) calls it as
+    // optional<string>(const float& value, const float& min, const float& max) with the value already scaled and
+    // snapped to the step. A disengaged (or missing) result makes the JavaScript print the raw float32
+    // (0.05000000074505806). Decimals follow the step: 0.05 -> 2, 1 -> 0, none -> 0.
     int decimals = 0;
     if (s.step > 0 && s.step < 1) decimals = static_cast<int>(std::ceil(-std::log10(s.step) - 1e-9));
     if (decimals > 6) decimals = 6;
-    new (at<void>(raw, kDerived + 0x18)) std::function<std::string(const float&, const float&, const float&)>(
-        [decimals](const float& value, const float&, const float&) {
-            char buf[48];
-            std::snprintf(buf, sizeof buf, "%.*f", decimals, static_cast<double>(value));
-            return std::string(buf);
-        }
-    );
+    new (at<void>(raw, kDerived + 0x18))
+        std::function<std::optional<std::string>(const float&, const float&, const float&)>(
+            [decimals](const float& value, const float&, const float&) {
+                char buf[48];
+                std::snprintf(buf, sizeof buf, "%.*f", decimals, static_cast<double>(value));
+                return std::optional<std::string>(buf);
+            }
+        );
     return finish(raw, kNumberFloat);
 }
 
