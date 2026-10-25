@@ -1,17 +1,16 @@
-// C++ API -> local model -> (when a host is attached) C ABI calls on the host's table.
+// C++ API -> local model -> (when a host is attached) lever.registry.v1 calls on the host (see internal/Client.cpp).
+// Platform specifics (election slot, level-join event, logger) live behind internal/Platform.h.
 
 #include "lever/Lever.h"
 
+#include "internal/Client.h"
 #include "internal/Election.h"
 #include "internal/Host.h"
 #include "internal/Log.h"
 #include "internal/Model.h"
+#include "internal/Platform.h"
 #include "internal/Version.h"
 
-#include "ll/api/event/EventBus.h"
-#include "ll/api/event/client/ClientJoinLevelEvent.h"
-
-#include <cstring>
 #include <memory>
 #include <mutex>
 
@@ -22,11 +21,7 @@ namespace {
 using detail::Mod;
 using detail::Registry;
 using detail::Setting;
-
-Registry& local() {
-    static Registry r;
-    return r;
-}
+using detail::client::local;
 
 // Returned for unknown mod ids so callers can keep chaining without null checks.
 Page& invalidPage() {
@@ -34,129 +29,9 @@ Page& invalidPage() {
     return p;
 }
 
-// ---- C trampolines: `user` is the stable address of the local Setting. ----
-
-int  tBool(void* u) { return static_cast<Setting*>(u)->getBool() ? 1 : 0; }
-void tSetBool(void* u, int v) { static_cast<Setting*>(u)->setBool(v != 0); }
-double tNumber(void* u) { return static_cast<Setting*>(u)->getNumber(); }
-void   tSetNumber(void* u, double v) { static_cast<Setting*>(u)->setNumber(v); }
-std::int32_t tIndex(void* u) { return static_cast<std::int32_t>(static_cast<Setting*>(u)->getIndex()); }
-void         tSetIndex(void* u, std::int32_t v) { static_cast<Setting*>(u)->setIndex(static_cast<int>(v)); }
-size_t tString(void* u, char* buf, size_t cap) {
-    const std::string s = static_cast<Setting*>(u)->getString();
-    if (buf && cap > 0) {
-        const size_t n = s.size() < cap - 1 ? s.size() : cap - 1;
-        std::memcpy(buf, s.data(), n);
-        buf[n] = '\0';
-    }
-    return s.size();
-}
-void tSetString(void* u, const char* v) { static_cast<Setting*>(u)->setString(v ? v : ""); }
-void tClick(void* u) { static_cast<Setting*>(u)->onClick(); }
-
-void forwardSetting(const LeverHostTable* t, const Mod& mod, const detail::Page& page, Setting& s) {
-    std::vector<const char*> opts;
-    for (const auto& o : s.options) opts.push_back(o.c_str());
-
-    LeverSettingDesc d{};
-    d.size        = sizeof(d);
-    d.modId       = mod.info.id.c_str();
-    d.pageId      = page.id.c_str();
-    d.id          = s.id.c_str();
-    d.kind        = s.kind;
-    d.label       = s.label.c_str();
-    d.description = s.description.c_str();
-    d.min = s.min, d.max = s.max, d.step = s.step;
-    d.options     = opts.empty() ? nullptr : opts.data();
-    d.optionCount = static_cast<std::uint32_t>(opts.size());
-    d.bannerKind  = s.bannerKind;
-    d.maxLength   = s.maxLength;
-    d.user        = &s;
-    if (s.getBool) d.getBool = &tBool;
-    if (s.setBool) d.setBool = &tSetBool;
-    if (s.getNumber) d.getNumber = &tNumber;
-    if (s.setNumber) d.setNumber = &tSetNumber;
-    if (s.getIndex) d.getIndex = &tIndex;
-    if (s.setIndex) d.setIndex = &tSetIndex;
-    if (s.getString) d.getString = &tString;
-    if (s.setString) d.setString = &tSetString;
-    if (s.onClick) d.onClick = &tClick;
-    if (t->addSetting(&d) == LEVER_OK) s.forwarded = true;
-}
-
-// Sends everything not yet forwarded, in registration order. No-op while no host is attached (= buffering).
-void flush() {
-    const LeverHostTable* t = detail::election::hostTable();
-    if (!t || !LEVER_TABLE_HAS(t, addSetting) || !LEVER_TABLE_HAS(t, registerPage)
-        || !LEVER_TABLE_HAS(t, registerMod) || !LEVER_TABLE_HAS(t, setPageSurfaces))
-        return;
-
-    std::lock_guard<std::mutex> lk(local().mutex);
-    for (Mod& mod : local().mods) {
-        if (!mod.forwarded) {
-            LeverModInfo mi{};
-            mi.size         = sizeof(mi);
-            mi.id           = mod.info.id.c_str();
-            mi.displayName  = mod.info.displayName.c_str();
-            mi.author       = mod.info.author.c_str();
-            mi.description  = mod.info.description.c_str();
-            mi.versionMajor = mod.info.version.major;
-            mi.versionMinor = mod.info.version.minor;
-            mi.versionPatch = mod.info.version.patch;
-            if (t->registerMod(&mi) != LEVER_OK) continue; // retry on the next flush
-            mod.forwarded = true;
-        }
-        for (auto& page : mod.pages) {
-            if (!page.forwarded) {
-                LeverPageDesc pd{};
-                pd.size     = sizeof(pd);
-                pd.modId    = mod.info.id.c_str();
-                pd.pageId   = page.id.c_str();
-                pd.title    = page.title.c_str();
-                pd.icon     = page.icon.empty() ? nullptr : page.icon.c_str();
-                pd.surfaces = page.surfaces;
-                if (t->registerPage(&pd) != LEVER_OK) continue;
-                page.forwarded         = true;
-                page.forwardedSurfaces = page.surfaces;
-            } else if (page.forwardedSurfaces != page.surfaces) {
-                if (t->setPageSurfaces(mod.info.id.c_str(), page.id.c_str(), page.surfaces) == LEVER_OK)
-                    page.forwardedSurfaces = page.surfaces;
-            }
-            for (auto& s : page.settings) {
-                if (!s.forwarded) forwardSetting(t, mod, page, s);
-            }
-        }
-    }
-}
-
-// ---- Lazy per-copy initialisation ----
-
-ll::event::ListenerPtr gJoinListener;
-std::mutex             gInitMutex;
-
-struct UnloadGuard {
-    ~UnloadGuard() { detail::election::withdraw(); }
-};
-
-void ensureInit() {
-    std::lock_guard<std::mutex> lk(gInitMutex);
-    static UnloadGuard guard; // withdraws this copy from the slot when its DLL unloads
-    detail::election::registerSelf();
-    if (!gJoinListener) {
-        // First use of the settings UI is not hookable yet (see Host.cpp), so elect when the player first joins a
-        // level: by then every mod has loaded and enabled, i.e. every copy is in the slot.
-        gJoinListener = ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientJoinLevelEvent>(
-            [](ll::event::ClientJoinLevelEvent&) {
-                detail::election::attachOrHost();
-                flush();
-            }
-        );
-    }
-}
-
 void touch() {
-    ensureInit();
-    flush();
+    detail::platform::ensureInit();
+    detail::client::flush();
 }
 
 void addSetting(const std::string& modId, const std::string& pageId, Setting s) {
@@ -275,11 +150,13 @@ Page& Page::addButton(std::string_view id, std::string_view label, std::string_v
     return *this;
 }
 
+
 // ---- Free functions ----
 
 std::string_view libraryVersion() { return LEVER_VERSION_STRING; }
 
 bool registerMod(const ModInfo& info) {
+    detail::platform::ensureInit();
     bool ok;
     {
         std::lock_guard<std::mutex> lk(local().mutex);
@@ -290,29 +167,19 @@ bool registerMod(const ModInfo& info) {
 }
 
 void unregisterMod(std::string_view modId) {
-    // Tell the host first so no callback into this DLL can happen after we return.
-    const LeverHostTable* t = detail::election::hostTable();
-    const std::string           id(modId);
+    const std::string id(modId);
+    bool              empty;
     {
         std::lock_guard<std::mutex> lk(local().mutex);
         Mod* mod = local().findMod(id);
         if (!mod) return;
-        if (mod->forwarded && LEVER_TABLE_HAS(t, unregisterMod)) t->unregisterMod(id.c_str());
+        // Tell the host first so no callback into this DLL can happen after we return.
+        if (mod->forwarded) detail::client::unregisterOnHost(id);
         local().removeMod(id);
-    }
-    // Last mod gone: stop listening so no callback outlives our DLL.
-    bool empty;
-    {
-        std::lock_guard<std::mutex> lk(local().mutex);
         empty = local().mods.empty();
     }
-    if (empty) {
-        std::lock_guard<std::mutex> lk(gInitMutex);
-        if (gJoinListener) {
-            ll::event::EventBus::getInstance().removeListener(gJoinListener);
-            gJoinListener.reset();
-        }
-    }
+    // Last mod gone: stop listening so no callback outlives our DLL.
+    if (empty) detail::platform::releaseListeners();
 }
 
 Page& addPage(std::string_view modId, std::string_view pageId, std::string_view title, std::string_view icon) {
@@ -327,20 +194,22 @@ Page& addPage(std::string_view modId, std::string_view pageId, std::string_view 
 }
 
 bool attachNow() {
-    ensureInit();
+    detail::platform::ensureInit();
     const bool ok = detail::election::attachOrHost() != nullptr;
-    flush();
+    detail::client::flush();
     return ok;
 }
 
 HostInfo hostInfo() {
     HostInfo info;
-    const LeverHostTable* t = detail::election::hostTable();
-    if (!t) return info;
+    const LeverBootstrap* b = detail::election::host();
+    if (!LEVER_BOOTSTRAP_VALID(b)) return info;
     info.attached   = true;
-    info.isThisCopy = t == detail::host::table();
-    info.version    = {t->libVersionMajor, t->libVersionMinor, t->libVersionPatch};
-    info.features   = t->size >= offsetof(LeverHostTable, features) + sizeof(t->features) ? t->features : 0;
+    info.isThisCopy = b == detail::host::bootstrap();
+    info.version    = {b->libMajor, b->libMinor, b->libPatch};
+    if (const auto* h = static_cast<const LeverHostV1*>(b->queryInterface(LEVER_IFACE_HOST_V1, 1));
+        LEVER_IFACE_HAS(LeverHostV1, h, getFeatures))
+        info.features = h->getFeatures();
     return info;
 }
 

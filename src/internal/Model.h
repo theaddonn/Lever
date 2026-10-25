@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -32,6 +33,8 @@ struct Setting {
     std::function<std::string()>          getString;
     std::function<void(const std::string&)> setString;
     std::function<void()>                 onClick;
+
+    std::shared_ptr<void> owner; // host registry only: keeps the C callback set (and its release hook) alive
 
     bool forwarded = false; // local registry only: already sent to the host
 };

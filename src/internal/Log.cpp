@@ -1,16 +1,21 @@
 #include "Log.h"
 
-#include "ll/api/io/Logger.h"
-#include "ll/api/mod/NativeMod.h"
+#include <atomic>
 
 namespace lever::detail {
 
+namespace {
+std::atomic<LogSink> gSink{nullptr};
+}
+
+void setLogSink(LogSink sink) { gSink.store(sink); }
+
 void logInfo(const std::string& message) {
-    if (auto mod = ll::mod::NativeMod::current()) mod->getLogger().info("[Lever] {}", message);
+    if (auto sink = gSink.load()) sink(LogLevel::Info, message);
 }
 
 void logWarn(const std::string& message) {
-    if (auto mod = ll::mod::NativeMod::current()) mod->getLogger().warn("[Lever] {}", message);
+    if (auto sink = gSink.load()) sink(LogLevel::Warn, message);
 }
 
 } // namespace lever::detail

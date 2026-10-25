@@ -1,20 +1,32 @@
 #pragma once
 
+#include "Slot.h"
+
 #include "lever/abi.h"
+
+#include <memory>
 
 namespace lever::detail::election {
 
-/// Publishes this copy (version + host table) in the process-wide slot. Idempotent and thread-safe.
-void registerSelf();
+/// Supplies the slot storage (platform::ensureInit does this). Ignored if a slot is already set. Returns false if
+/// `slot` holds foreign data and was rejected.
+bool useSlot(std::unique_ptr<ISlot> slot);
+bool hasSlot();
 
-/// Runs the election if nobody has been elected yet and returns the host's table (this copy's own table if it won).
-/// Idempotent and thread-safe. Returns nullptr only if the slot could not be created.
-const LeverHostTable* attachOrHost();
+/// Publishes a copy (version + bootstrap) in the slot. Idempotent and thread-safe. No-op without a slot.
+void registerSelf(const LeverBootstrap* self);
+
+/// Runs the election if nobody has been elected yet and returns the host's bootstrap (the caller's own if it won).
+/// Idempotent and thread-safe. nullptr if there is no slot or nobody registered.
+const LeverBootstrap* attachOrHost();
 
 /// The cached result of attachOrHost(); nullptr until the election has run. Lock-free.
-const LeverHostTable* hostTable();
+const LeverBootstrap* host();
 
-/// Removes this copy from the slot (called automatically when the DLL unloads).
-void withdraw();
+/// Number of registered copies (0 without a slot).
+std::uint32_t registeredCopies();
+
+/// Removes `self` from the slot and drops this process's view of it (called when the DLL unloads; tests use it to reset).
+void withdraw(const LeverBootstrap* self);
 
 } // namespace lever::detail::election
