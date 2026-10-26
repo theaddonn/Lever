@@ -149,7 +149,7 @@ Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp` (e
   publisher the vanilla providers use after a write, so the queries re-read the getters. Older hosts without the
   append are tolerated (the call is dropped).
 
-Not yet: the nav icon is the placeholder (the icon map is JS); labels are literal strings (a localisation key passed
+Not yet: the nav icon is the placeholder (the JS icon table is keyed by vanilla page ids, see `docs/RE-components.md`); labels are literal strings (a localisation key passed
 as the label is resolved by the game, so mods can ship keys through a resource pack); `installTier2Hooks()` is still
 a stub; the pause-menu and world-creation surfaces are recorded but not rendered.
 
