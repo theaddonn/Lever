@@ -147,7 +147,7 @@ Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp` (e
 - External value changes: `lever::notifyChanged(mod, page, setting)` (interface `lever.registry.v1` version 2,
   `notifyChanged`) fires the change listener of every live provider with a matching key, which is the same
   publisher the vanilla providers use after a write, so the queries re-read the getters. Older hosts without the
-  append are tolerated (the call is dropped).
+  append are tolerated (the call is dropped). Verified in game 2026-10-26 (the example's Reset button).
 
 Not yet: the nav icon is the placeholder (the JS icon table is keyed by vanilla page ids, see `docs/RE-components.md`); labels are literal strings (a localisation key passed
 as the label is resolved by the game, so mods can ship keys through a resource pack); `installTier2Hooks()` is still
