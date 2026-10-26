@@ -1,5 +1,5 @@
-// Minimal LeviLamina client mod that embeds Lever. It shows the intended call pattern; the pages only appear
-// in game once the library's hooks are implemented (see docs/DESIGN.md).
+// Minimal LeviLamina client mod that embeds Lever. It shows the intended call pattern: register in enable(),
+// unregister in disable(), and call notifyChanged() when values change behind the UI's back.
 
 #include "lever/Lever.h"
 
@@ -38,8 +38,11 @@ public:
             .addSlider("strength", "Strength", "How much", 0.0, 1.0, 0.05, [] { return gStrength; }, [](double v) { gStrength = v; })
             .addDropdown("mode", "Mode", "Pick one", {"Low", "Medium", "High"}, [] { return gMode; }, [](int v) { gMode = v; })
             .addTextField("name", "Name", "Free text", [] { return gName; }, [](const std::string& v) { gName = v; })
-            .addButton("reset", "Reset", "Restore defaults", [] { gEnabled = true; gStrength = 0.5; gMode = 0; })
-            .addBanner("b1", "Pre-alpha: nothing is displayed yet.", BannerKind::Warning);
+            .addButton("reset", "Reset", "Restore defaults", [] {
+                gEnabled = true, gStrength = 0.5, gMode = 0, gName = "Steve";
+                notifyChanged("lever_example", "main"); // the open widgets re-read their getters
+            })
+            .addBanner("b1", "Pre-alpha: values are not persisted across restarts.", BannerKind::Warning);
         mSelf.getLogger().info("Lever {} embedded", libraryVersion());
         return true;
     }

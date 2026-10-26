@@ -75,4 +75,8 @@ void flushTranslations();
 /// true when hand-built toggles are available (the BooleanComponent vtable is known for this build).
 bool togglesSupported();
 
+/// Fires the change listener of every live provider whose key matches (empty pageId / settingId = any), which
+/// makes the game's settings queries re-read the values. Game thread only.
+void notifyChanged(std::string_view modId, std::string_view pageId, std::string_view settingId);
+
 } // namespace lever::detail::native

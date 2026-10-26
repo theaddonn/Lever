@@ -141,12 +141,15 @@ typedef struct LeverSettingDesc {
  */
 typedef struct LeverRegistryV1 {
     uint32_t size;    /* sizeof(LeverRegistryV1) */
-    uint32_t version; /* 1 */
+    uint32_t version; /* 2 */
     int (*registerMod)(const LeverModInfo* info);
     int (*unregisterMod)(const char* modId); /* drops the mod with all pages and settings (release callbacks run) */
     int (*registerPage)(const LeverPageDesc* page);
     int (*setPageSurfaces)(const char* modId, const char* pageId, uint32_t surfaces);
     int (*addSetting)(const LeverSettingDesc* setting);
+    /* version 2: tells the host that values changed behind the UI's back (a keybind, a reset, a config reload), so
+     * open widgets re-read their getters. NULL or empty pageId / settingId act as wildcards. Game thread only. */
+    int (*notifyChanged)(const char* modId, const char* pageId, const char* settingId);
 } LeverRegistryV1;
 
 /* lever.host.v1: what the elected host is and can do. */

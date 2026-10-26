@@ -39,10 +39,11 @@ static_assert(OFF(LeverSettingDesc, bannerKind) == 84 && OFF(LeverSettingDesc, m
 static_assert(OFF(LeverSettingDesc, callbacks) == 96);
 static_assert(LEVER_SETTINGDESC_V1_MIN_SIZE == 32);
 
-static_assert(sizeof(LeverRegistryV1) == 48);
+static_assert(sizeof(LeverRegistryV1) == 56);
 static_assert(OFF(LeverRegistryV1, version) == 4 && OFF(LeverRegistryV1, registerMod) == 8);
 static_assert(OFF(LeverRegistryV1, unregisterMod) == 16 && OFF(LeverRegistryV1, registerPage) == 24);
 static_assert(OFF(LeverRegistryV1, setPageSurfaces) == 32 && OFF(LeverRegistryV1, addSetting) == 40);
+static_assert(OFF(LeverRegistryV1, notifyChanged) == 48); // version 2 append
 
 static_assert(sizeof(LeverHostV1) == 24);
 static_assert(OFF(LeverHostV1, getFeatures) == 8 && OFF(LeverHostV1, isActivated) == 16);

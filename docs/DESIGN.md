@@ -1,6 +1,6 @@
 # Design
 
-Status: pre-alpha. The consumer API, the C ABI, the host election and the in-process model are implemented. The game hooks are stubs (`src/internal/Host.cpp`). Everything below the "Tiers" heading is the plan; items marked **open** are not verified yet.
+Status: pre-alpha. The consumer API, the C ABI, the host election, the in-process model and tier 1 (the native settings pages) are implemented and verified in game. Everything below the "Tiers" heading is the plan; items marked **open** are not verified yet.
 
 ## Goal
 
@@ -141,10 +141,24 @@ Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp` (e
   the game drops a description whose I18n lookup returns the input unchanged.
 - `getFeatures` reports `LEVER_FEATURE_GLOBAL_SETTINGS | LEVER_FEATURE_INFO_PAGES`.
 
-Not yet: registrations made after the registry was built are only picked up when the game rebuilds it (no
-`refresh` call); external value changes are not pushed to the UI (`setChangeListener` is stored but unused); the nav
-icon is the placeholder (the icon map is JS); labels are literal strings (a localisation key passed as the label is
-resolved by the game, so mods can ship keys through a resource pack); `installTier2Hooks()` is still a stub.
+- Late registrations: a page added after the registry was built gets its factory registered into the live registry
+  (`platform::registryChanged`, called by the host after every accepted `registerPage`); the nav section and the
+  page rows are rebuilt from the model every time they open, so mods, settings and surfaces need nothing more.
+- External value changes: `lever::notifyChanged(mod, page, setting)` (interface `lever.registry.v1` version 2,
+  `notifyChanged`) fires the change listener of every live provider with a matching key, which is the same
+  publisher the vanilla providers use after a write, so the queries re-read the getters. Older hosts without the
+  append are tolerated (the call is dropped).
+
+Not yet: the nav icon is the placeholder (the icon map is JS); labels are literal strings (a localisation key passed
+as the label is resolved by the game, so mods can ship keys through a resource pack); `installTier2Hooks()` is still
+a stub; the pause-menu and world-creation surfaces are recorded but not rendered.
+
+## In-game check (notifyChanged)
+
+Open the Lever Example page, flip the toggle, move the slider, pick "High" and edit the name, then press "Reset".
+Expected: all four widgets snap back to their defaults (on, 0.50, Low, Steve) without leaving the page. The log
+shows nothing new for this (the notification goes straight to the game's publisher). If the widgets only update
+after reopening the page, the change listener wiring (`wireChangeListener`) or the live-provider set is at fault.
 
 ## In-game check (widgets)
 

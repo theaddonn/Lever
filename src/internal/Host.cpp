@@ -9,6 +9,7 @@
 #include "Election.h"
 #include "Log.h"
 #include "Marshal.h"
+#include "Platform.h"
 #include "Version.h"
 
 #include <atomic>
@@ -82,13 +83,22 @@ int hostRegisterPage(const LeverPageDesc* page) {
     LeverPageDesc d;
     if (int rc = readDescriptor(page, LEVER_PAGEDESC_V1_MIN_SIZE, d); rc != LEVER_OK) return rc;
     if (!d.modId || !d.pageId || !*d.pageId) return LEVER_E_INVALID;
-    std::lock_guard<std::mutex> lk(model().mutex);
-    if (!model().findMod(d.modId)) return LEVER_E_NOT_FOUND;
-    if (model().findPage(d.modId, d.pageId)) return LEVER_E_DUPLICATE;
-    std::string title = d.title && *d.title ? copyString(d.title) : copyString(d.pageId);
-    Page*       p     = model().addPage(d.modId, d.pageId, std::move(title), copyString(d.icon));
-    if (!p) return LEVER_E_INVALID;
-    p->surfaces = LEVER_DESC_HAS(LeverPageDesc, d, surfaces) ? d.surfaces : LEVER_SURFACE_GLOBAL_SETTINGS;
+    {
+        std::lock_guard<std::mutex> lk(model().mutex);
+        if (!model().findMod(d.modId)) return LEVER_E_NOT_FOUND;
+        if (model().findPage(d.modId, d.pageId)) return LEVER_E_DUPLICATE;
+        std::string title = d.title && *d.title ? copyString(d.title) : copyString(d.pageId);
+        Page*       p     = model().addPage(d.modId, d.pageId, std::move(title), copyString(d.icon));
+        if (!p) return LEVER_E_INVALID;
+        p->surfaces = LEVER_DESC_HAS(LeverPageDesc, d, surfaces) ? d.surfaces : LEVER_SURFACE_GLOBAL_SETTINGS;
+    }
+    platform::registryChanged(); // outside the model lock: the platform takes it again to enumerate pages
+    return LEVER_OK;
+}
+
+int hostNotifyChanged(const char* modId, const char* pageId, const char* settingId) {
+    if (!modId || !*modId) return LEVER_E_INVALID;
+    platform::notifySettingChanged(modId, pageId ? pageId : "", settingId ? settingId : "");
     return LEVER_OK;
 }
 
@@ -133,15 +143,13 @@ int hostUnregisterMod(const char* modId) {
     return model().removeMod(modId) ? LEVER_OK : LEVER_E_NOT_FOUND;
 }
 
-// ---- Hook installation: STUBS. Nothing is hooked yet. ----
+// ---- Hook activation ----
 
 void installTier1Hooks() {
     // The native settings hook (platform/win32/SettingsHook.cpp) is installed by every copy at init; from now on
-    // this copy is the one that injects the Mods page when the game builds its settings registry. Implemented so
-    // far: the "Lever Mods" page under General with one text row per registered mod (info pages). Typed
-    // settings (toggle/slider/dropdown/text/button/banner) are not rendered yet: their component constructors are
-    // not exported (docs/RE-settings-screen.md).
-    logInfo("tier 1: native settings page active (info rows only; typed settings pending)");
+    // this copy is the one that injects the Mods section, the overview page and the mod pages when the game builds
+    // its settings registry (docs/DESIGN.md, "Tier 1 status").
+    logInfo("tier 1: native settings pages active");
 }
 
 void installTier2Hooks() {
@@ -176,12 +184,13 @@ const LeverHostV1 kHostV1 = [] {
 const LeverRegistryV1 kRegistryV1 = [] {
     LeverRegistryV1 v{};
     v.size            = sizeof(LeverRegistryV1);
-    v.version         = 1;
+    v.version         = 2; // notifyChanged appended
     v.registerMod     = &hostRegisterMod;
     v.unregisterMod   = &hostUnregisterMod;
     v.registerPage    = &hostRegisterPage;
     v.setPageSurfaces = &hostSetPageSurfaces;
     v.addSetting      = &hostAddSetting;
+    v.notifyChanged   = &hostNotifyChanged;
     return v;
 }();
 

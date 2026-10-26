@@ -9,7 +9,8 @@
  * happens lazily at first use, so you never need to coordinate with other mods:
  *
  *  - Every function below is safe to call at any time after your mod is loaded (typically from `load()` or
- *    `enable()`). Registrations are buffered locally until a host exists and are then flushed in order.
+ *    `enable()`). Registrations are buffered locally until a host exists and are then flushed in order; pages added
+ *    after the settings screen was first built appear the next time it opens.
  *  - Callbacks (getters, setters, onClick) run on the game's UI thread. Keep them short and do not throw.
  *  - Your mod must call `unregisterMod` from `disable()`/`unload()` (or at least before its DLL is unloaded), because
  *    the callbacks point into your DLL.
@@ -92,6 +93,10 @@ public:
     Page& addTextField(std::string_view id, std::string_view label, std::string_view description, StringGetter getter, StringSetter setter, std::uint32_t maxLength = 256);
     Page& addButton(std::string_view id, std::string_view label, std::string_view description, Action onClick);
 
+    /// Tells open widgets of this page (or of one setting) to re-read their getters after a value changed outside
+    /// the UI. Game thread only.
+    Page& notifyChanged(std::string_view settingId = {});
+
     Page(std::string modId, std::string pageId, bool valid) : mModId(std::move(modId)), mId(std::move(pageId)), mValid(valid) {}
 
 private:
@@ -114,6 +119,13 @@ void unregisterMod(std::string_view modId);
  * for the default. Returns the existing page if the id is already used; returns an invalid page if the mod is unknown.
  */
 Page& addPage(std::string_view modId, std::string_view pageId, std::string_view title, std::string_view icon = {});
+
+/**
+ * Tells open widgets to re-read their getters after values changed outside the UI (a keybind toggled an option,
+ * a reset button restored defaults, a config file was reloaded). Empty `pageId` / `settingId` mean "all". A no-op
+ * when no host is attached or the host predates this call. Game thread only.
+ */
+void notifyChanged(std::string_view modId, std::string_view pageId = {}, std::string_view settingId = {});
 
 /// Runs the host election now instead of waiting for the first use. Normally not needed. Returns whether a host is attached.
 bool attachNow();

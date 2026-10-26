@@ -150,6 +150,10 @@ Page& Page::addButton(std::string_view id, std::string_view label, std::string_v
     return *this;
 }
 
+Page& Page::notifyChanged(std::string_view settingId) {
+    if (mValid) lever::notifyChanged(mModId, mId, settingId);
+    return *this;
+}
 
 // ---- Free functions ----
 
@@ -191,6 +195,11 @@ Page& addPage(std::string_view modId, std::string_view pageId, std::string_view 
     if (!handle) return invalidPage();
     touch();
     return *handle;
+}
+
+void notifyChanged(std::string_view modId, std::string_view pageId, std::string_view settingId) {
+    if (modId.empty()) return;
+    detail::client::notifyChangedOnHost(std::string(modId), std::string(pageId), std::string(settingId));
 }
 
 bool attachNow() {

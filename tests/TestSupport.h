@@ -40,6 +40,19 @@ inline std::vector<LogLine>& logLines() {
 
 inline void captureLog(detail::LogLevel level, const std::string& text) { logLines().push_back({level, text}); }
 
+/// What the platform stub received from the host: notifySettingChanged calls and registryChanged counts.
+struct Notification {
+    std::string modId, pageId, settingId;
+};
+inline std::vector<Notification>& notifications() {
+    static std::vector<Notification> v;
+    return v;
+}
+inline int& registryChanges() {
+    static int n = 0;
+    return n;
+}
+
 /// Puts the library back into its pristine state and captures log output. Call at the start of every test that
 /// touches global state (host model, local registry, election).
 inline void resetAll() {
@@ -53,6 +66,8 @@ inline void resetAll() {
         detail::client::local().mods.clear();
     }
     detail::client::resetWarnings();
+    notifications().clear();
+    registryChanges() = 0;
     logLines().clear();
     detail::setLogSink(&captureLog);
 }

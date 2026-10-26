@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Design notes in `docs/DESIGN.md` and static RE notes on the Ore UI settings screen in `docs/RE-settings-screen.md`.
 - Tier 1: `Settings::RegistryBuilder::buildDefaultSettingsRegistry` is hooked; the host copy adds a "Mods" nav section with an overview page and one page per registered mod page, rendering toggles, sliders, dropdowns, text fields, buttons, banners and headers with the vanilla widgets (`docs/RE-components.md`).
 - `manifest.json` template for the example mod packer.
+- `lever::notifyChanged(mod, page, setting)` / `Page::notifyChanged()`: open widgets re-read their getters after a value changed outside the UI. Appended to `lever.registry.v1` as version 2 (`notifyChanged`); older hosts are tolerated.
+- Pages registered after the game built its settings registry are added to the live registry, so a late mod still gets its page without a game restart.
 
 ### Fixed
 

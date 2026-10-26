@@ -16,4 +16,10 @@ void installSettingsHook() {}
 
 void uninstallSettingsHook() {}
 
+void registryChanged() { ++lever::test::registryChanges(); }
+
+void notifySettingChanged(const char* modId, const char* pageId, const char* settingId) {
+    lever::test::notifications().push_back({modId ? modId : "", pageId ? pageId : "", settingId ? settingId : ""});
+}
+
 } // namespace lever::detail::platform

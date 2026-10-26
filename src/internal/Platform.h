@@ -20,4 +20,11 @@ void installSettingsHook();
 /// Removes the hook (DLL unload).
 void uninstallSettingsHook();
 
+/// A page was added to the host model after the game may already have built its settings registry: register the
+/// page's factory into the live registry (host copy only; a no-op before the registry exists).
+void registryChanged();
+
+/// Makes the open widgets of the given setting (empty pageId / settingId = wildcard) re-read their getters.
+void notifySettingChanged(const char* modId, const char* pageId, const char* settingId);
+
 } // namespace lever::detail::platform

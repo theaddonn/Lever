@@ -29,4 +29,8 @@ void resetWarnings();
 /// Tells the host to drop `modId` (if it was forwarded there).
 void unregisterOnHost(const std::string& modId);
 
+/// Forwards a value-changed notification (lever.registry.v1 version 2). Silently a no-op without a host or when the
+/// host is older than that.
+void notifyChangedOnHost(const std::string& modId, const std::string& pageId, const std::string& settingId);
+
 } // namespace lever::detail::client

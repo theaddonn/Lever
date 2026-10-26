@@ -152,4 +152,12 @@ void unregisterOnHost(const std::string& modId) {
     if (const LeverRegistryV1* r = registryOf(host)) r->unregisterMod(modId.c_str());
 }
 
+void notifyChangedOnHost(const std::string& modId, const std::string& pageId, const std::string& settingId) {
+    const LeverBootstrap* host = election::host();
+    if (!host) return;
+    const LeverRegistryV1* r = registryOf(host);
+    if (!LEVER_IFACE_HAS(LeverRegistryV1, r, notifyChanged)) return; // an older host: nothing to refresh
+    r->notifyChanged(modId.c_str(), pageId.c_str(), settingId.c_str());
+}
+
 } // namespace lever::detail::client

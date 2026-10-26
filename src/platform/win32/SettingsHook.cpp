@@ -126,6 +126,23 @@ bool appendEntry(::Settings::Registry& reg, const char* wrappedKey, std::string 
     return true;
 }
 
+// Registers the factory of every model page that the registry does not know yet. Returns how many were added.
+int registerPageFactories(::Settings::Registry& reg) {
+    auto&                       factories = *reg.mSettingsFactories;
+    int                         added     = 0;
+    Registry&                   m         = host::model();
+    std::lock_guard<std::mutex> lk(m.mutex);
+    for (const Mod& mod : m.mods)
+        for (const Page& page : mod.pages) {
+            const std::string key = pageKey(mod, page);
+            if (factories.find(key) != factories.end()) continue;
+            std::string modId = mod.info.id, pageId = page.id;
+            reg.registerSettingsFactory(key, native::Factory([modId, pageId] { return buildPage(modId, pageId); }));
+            ++added;
+        }
+    return added;
+}
+
 void injectInto(::Settings::Registry& reg) {
     // 1. A "Mods" section in the nav, or (fallback) an entry at the end of General.
     if (appendEntry(reg, kTabsKey, kSectionKey, "Mods", std::nullopt)) {
@@ -137,20 +154,7 @@ void injectInto(::Settings::Registry& reg) {
     }
     // 2. The overview page and one factory per registered page.
     reg.registerSettingsFactory(kOverviewKey, native::Factory(&buildOverview));
-    int pages = 0;
-    {
-        Registry&                   m = host::model();
-        std::lock_guard<std::mutex> lk(m.mutex);
-        for (const Mod& mod : m.mods)
-            for (const Page& page : mod.pages) {
-                std::string modId = mod.info.id, pageId = page.id;
-                reg.registerSettingsFactory(
-                    pageKey(mod, page),
-                    native::Factory([modId, pageId] { return buildPage(modId, pageId); })
-                );
-                ++pages;
-            }
-    }
+    const int pages = registerPageFactories(reg);
     logInfo(
         std::string("settings: registered group ") + kOverviewKey + " and " + std::to_string(pages) + " mod page(s); toggles "
         + (native::togglesSupported() ? "native" : "as dropdowns")
@@ -211,6 +215,28 @@ void installSettingsHook() {
     } catch (...) {
         logWarn("settings: could not hook buildDefaultSettingsRegistry (symbol unresolved?); no Mods page");
     }
+}
+
+// Pages registered after the game built its registry: the nav section enumerates the model on every open, so only
+// the page factory is missing. Settings added to an existing page need nothing: the page factory rebuilds the rows
+// each time the page opens.
+void registryChanged() {
+    std::shared_ptr<::Settings::IRegistry> reg;
+    {
+        std::lock_guard<std::mutex> lk(gRegistryMutex);
+        reg = gLastRegistry.lock();
+    }
+    if (!reg) return; // not built yet: injectInto will pick the page up
+    try {
+        if (int n = registerPageFactories(static_cast<::Settings::Registry&>(*reg)); n > 0)
+            logInfo("settings: registered " + std::to_string(n) + " late page(s)");
+    } catch (...) {
+        logWarn("settings: exception while registering a late page");
+    }
+}
+
+void notifySettingChanged(const char* modId, const char* pageId, const char* settingId) {
+    native::notifyChanged(modId ? modId : "", pageId ? pageId : "", settingId ? settingId : "");
 }
 
 void uninstallSettingsHook() {

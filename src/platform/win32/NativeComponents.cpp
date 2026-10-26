@@ -28,6 +28,7 @@
 #include <new>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -131,16 +132,36 @@ void* beginHandBuilt(
 // Bedrock::PubSub::Subscription mSubscription (+0x48, 16 bytes). Virtual order: dtor, setChangeListener, canModify.
 // The SDK class cannot be used as a base (its Subscription has no usable constructor), so this mirrors it.
 
+struct ProviderBase;
+
+// Every provider alive right now (the game destroys them with the page), so notifyChanged can reach them. Leaked on
+// purpose: providers may outlive static destruction order at shutdown. Recursive: a notification can synchronously
+// rebuild widgets, i.e. construct and destroy providers on the same thread.
+struct LiveProviders {
+    std::recursive_mutex              mutex;
+    std::unordered_set<ProviderBase*> set;
+};
+LiveProviders& liveProviders() {
+    static auto* live = new LiveProviders();
+    return *live;
+}
+
 struct ProviderBase {
-    virtual ~ProviderBase() = default;
+    virtual ~ProviderBase() {
+        LiveProviders&                         live = liveProviders();
+        std::lock_guard<std::recursive_mutex> lk(live.mutex);
+        live.set.erase(this);
+    }
     virtual void setChangeListener(std::function<void()> callback) { listener = std::move(callback); }
     virtual bool canModify() const { return true; }
 
     std::function<void()> listener;
     unsigned char         subscription[16]{};
 
-    explicit ProviderBase(SettingKey k) : key(std::move(k)) {}
-    ProviderBase() = default;
+    explicit ProviderBase(SettingKey k) : key(std::move(k)) { track(); }
+    ProviderBase() { track(); }
+    ProviderBase(const ProviderBase&)            = delete;
+    ProviderBase& operator=(const ProviderBase&) = delete;
 
     SettingKey key;
 
@@ -148,6 +169,11 @@ struct ProviderBase {
     /// screen shows the old value again.
     void notify() const {
         if (listener) listener();
+    }
+
+    bool matches(std::string_view modId, std::string_view pageId, std::string_view settingId) const {
+        return key.modId == modId && (pageId.empty() || key.pageId == pageId)
+            && (settingId.empty() || key.settingId == settingId);
     }
 
     /// Runs fn(setting) under the host model lock if the setting still exists.
@@ -158,8 +184,18 @@ struct ProviderBase {
         if (Page* p = m.findPage(key.modId, key.pageId))
             if (Setting* s = m.findSetting(*p, key.settingId)) fn(*s);
     }
+
+private:
+    void track();
 };
 static_assert(offsetof(ProviderBase, listener) == 0x08, "IDataProvider layout");
+
+void ProviderBase::track() {
+    LiveProviders&                         live = liveProviders();
+    std::lock_guard<std::recursive_mutex> lk(live.mutex);
+    live.set.insert(this);
+}
+
 static_assert(sizeof(std::function<void()>) == 64, "MSVC std::function size");
 
 void wireChangeListener(void* raw, ProviderBase* provider) {
@@ -382,6 +418,19 @@ Element makeGroupInfo(std::string_view id, std::string_view name, std::optional<
 }
 
 bool togglesSupported() { return booleanVtable() != 0; }
+
+void notifyChanged(std::string_view modId, std::string_view pageId, std::string_view settingId) {
+    if (modId.empty()) return;
+    LiveProviders&                         live = liveProviders();
+    std::lock_guard<std::recursive_mutex> lk(live.mutex);
+    // Snapshot: a listener may rebuild widgets and change the set while we iterate.
+    std::vector<ProviderBase*> hit;
+    for (ProviderBase* p : live.set)
+        if (p->key.modId.size() && p->matches(modId, pageId, settingId)) hit.push_back(p);
+    for (ProviderBase* p : hit)
+        if (live.set.count(p)) p->notify();
+}
+
 
 void flushTranslations() {
     std::unordered_map<std::string, std::string> copy;
