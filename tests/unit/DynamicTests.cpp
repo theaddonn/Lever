@@ -280,6 +280,11 @@ TEST_CASE("slider grid: positions, index mapping, decimals and divider rule") {
     CHECK(f.valueAt(15) == 2.0);
     CHECK(f.format(3) == "0.8");
 
+    SliderGrid neg = SliderGrid::of(-0.3, 0.3, 0.1);
+    CHECK(neg.positions == 7);
+    CHECK(neg.format(3) == "0.0"); // not "-0.0"
+    CHECK(neg.format(0) == "-0.3");
+
     SliderGrid degenerate = SliderGrid::of(5, 5, 1);
     CHECK(degenerate.positions == 1);
     CHECK(degenerate.valueAt(3) == 5);

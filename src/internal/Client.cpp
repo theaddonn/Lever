@@ -15,7 +15,9 @@ namespace {
 // They read the Setting's std::functions at call time, so modifiers installed after forwarding (conditions, onChange)
 // are honoured without another round trip to the host.
 
-// After a write made through the UI: the widget's, the section's and the mod's onChange hooks, in that order.
+// After a write made through the UI: the widget's, the section's and the mod's onChange hooks, in that order. Read
+// without the local lock: the hooks are installed and run on the game thread (Lever.h, "Callbacks run on the game's
+// UI thread"), and taking the lock here would deadlock a hook that registers something.
 void afterWrite(Setting& s) {
     if (s.onChange) s.onChange();
     if (s.page && s.page->onChange) s.page->onChange();

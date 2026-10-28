@@ -18,7 +18,9 @@ struct SliderGrid {
 
     /// Dividers are drawn by default only for sliders with at most this many positions.
     static constexpr int kMaxDividerPositions = 10;
-    static constexpr int kMaxPositions        = 100000;
+    /// A range with more positions than this is cut off at min + step * (kMaxPositions - 1); such a range is a
+    /// text field's job, not a slider's.
+    static constexpr int kMaxPositions = 100000;
 
     static SliderGrid of(double min, double max, double step) {
         SliderGrid g;
@@ -52,9 +54,10 @@ struct SliderGrid {
         if (index > positions - 1) index = positions - 1;
         const double raw = min + step * index;
         const int    d   = decimals();
-        if (d == 0) return std::round(raw);
-        const double p = std::pow(10.0, d);
-        return std::round(raw * p) / p;
+        const double p   = std::pow(10.0, d);
+        double       r   = std::round(raw * p) / p;
+        if (r == 0) r = 0.0; // never -0.0 (it would print as "-0.00")
+        return r;
     }
 
     /// Decimals needed to print a value on the grid (0.05 -> 2, 1 -> 0, 2.5 -> 1), at most 6.

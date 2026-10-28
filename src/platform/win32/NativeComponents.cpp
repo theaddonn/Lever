@@ -147,12 +147,21 @@ struct ProviderBase {
 
     SettingKey key;
 
-    /// Runs fn(setting) under the host model lock if the setting still exists.
+    /// Runs fn(setting) under the host model lock if the setting still exists. fn must not call back into the mod:
+    /// a callback may re-enter the host (notifyChanged, Widget::label), which takes this lock again.
     template <class Fn>
     void with(Fn&& fn) const {
         Registry&                   m = host::model();
         std::lock_guard<std::mutex> lk(m.mutex);
         if (Setting* s = m.findSetting(key.modId, key.pageId, key.settingId)) fn(*s);
+    }
+
+    /// A copy of one of the setting's callbacks (empty if the setting is gone), to be called without the lock.
+    template <class F>
+    F grab(F Setting::*member) const {
+        F fn;
+        with([&](Setting& s) { fn = s.*member; });
+        return fn;
     }
 };
 static_assert(offsetof(ProviderBase, listener) == 0x08, "IDataProvider layout");
@@ -212,8 +221,9 @@ int nativeState(int leverState) {
     }
 }
 
-/// Installs the state override on a built component: the setting's current LEVER_STATE_* (stateOf) wins over the
-/// class default unless it is Enabled, in which case the class default (e.g. Disabled for a read-only provider) stays.
+/// Installs the state override on a built component: the setting's current LEVER_STATE_* (its getState callback)
+/// wins over the class default unless it is Enabled, in which case the class default (e.g. Disabled for a read-only
+/// provider) stays. The callback runs without the model lock: it belongs to the mod and may re-enter the host.
 void installState(void* raw, const SettingKey& key) {
     {
         LiveComponents&                        live = liveComponents();
@@ -222,11 +232,16 @@ void installState(void* raw, const SettingKey& key) {
     }
     auto token = std::make_shared<Token>(raw);
     new (at<void>(raw, kStateFnOffset)) StateFn([key, token](const NativeComponent&, const int& defaultState) {
-        int st = LEVER_STATE_ENABLED;
+        std::function<int()> getState;
         {
             Registry&                   m = host::model();
             std::lock_guard<std::mutex> lk(m.mutex);
-            if (Setting* s = m.findSetting(key.modId, key.pageId, key.settingId)) st = stateOf(*s);
+            if (Setting* s = m.findSetting(key.modId, key.pageId, key.settingId)) getState = s->getState;
+        }
+        int st = LEVER_STATE_ENABLED;
+        if (getState) {
+            const int v = getState();
+            if (v == LEVER_STATE_DISABLED || v == LEVER_STATE_HIDDEN) st = v;
         }
         return st == LEVER_STATE_ENABLED ? defaultState : nativeState(st);
     });
@@ -257,12 +272,11 @@ void afterWrite(const SettingKey& key) { publishMatching(key.modId, {}, {}); }
 struct BoolProvider : ProviderBase {
     using ProviderBase::ProviderBase;
     virtual bool getValue() const {
-        bool v = false;
-        with([&](Setting& s) { if (s.getBool) v = s.getBool(); });
-        return v;
+        auto get = grab(&Setting::getBool);
+        return get ? get() : false;
     }
     virtual void setValue(bool value) {
-        with([&](Setting& s) { if (s.setBool) s.setBool(value); });
+        if (auto set = grab(&Setting::setBool)) set(value);
         afterWrite(key);
     }
     virtual bool flush() { return false; }
@@ -281,16 +295,11 @@ struct FloatProvider : ProviderBase {
         return g;
     }
     virtual float getValue() const {
-        int index = 0;
-        with([&](Setting& s) {
-            if (s.getNumber) index = SliderGrid::of(s.min, s.max, s.step).indexOf(s.getNumber());
-        });
-        return static_cast<float>(index);
+        auto get = grab(&Setting::getNumber);
+        return get ? static_cast<float>(grid().indexOf(get())) : 0.0f;
     }
     virtual void setValue(float index) {
-        with([&](Setting& s) {
-            if (s.setNumber) s.setNumber(SliderGrid::of(s.min, s.max, s.step).valueAt(static_cast<int>(std::lround(index))));
-        });
+        if (auto set = grab(&Setting::setNumber)) set(grid().valueAt(static_cast<int>(std::lround(index))));
         afterWrite(key);
     }
     virtual float getMin() const { return 0.0f; }
@@ -313,16 +322,15 @@ struct StringProvider : ProviderBase {
 
     virtual std::string getValue() const {
         if (pending) return *pending;
-        std::string v;
-        with([&](Setting& s) { if (s.getString) v = s.getString(); });
-        return v;
+        auto get = grab(&Setting::getString);
+        return get ? get() : std::string();
     }
     virtual void setValue(std::string_view value) { pending = std::string(value); }
     virtual void commitValue() {
         if (!pending) return;
         std::string v = std::move(*pending);
         pending.reset();
-        with([&](Setting& s) { if (s.setString) s.setString(v); });
+        if (auto set = grab(&Setting::setString)) set(v);
         afterWrite(key);
     }
     virtual bool flush() { return false; }
@@ -354,18 +362,17 @@ struct OptionsProvider : ProviderBase {
         return {reinterpret_cast<const ::Settings::OptionData*>(options.data()), options.size()};
     }
     virtual int getValue() const {
-        int v = 0;
-        with([&](Setting& s) {
-            if (asToggle) v = s.getBool && s.getBool() ? 1 : 0;
-            else if (s.getIndex) v = s.getIndex();
-        });
-        return v;
+        if (asToggle) {
+            auto get = grab(&Setting::getBool);
+            return get && get() ? 1 : 0;
+        }
+        auto get = grab(&Setting::getIndex);
+        return get ? get() : 0;
     }
     virtual void setValue(int index) {
-        with([&](Setting& s) {
-            if (asToggle) { if (s.setBool) s.setBool(index != 0); }
-            else if (s.setIndex) s.setIndex(index);
-        });
+        if (asToggle) {
+            if (auto set = grab(&Setting::setBool)) set(index != 0);
+        } else if (auto set = grab(&Setting::setIndex)) set(index);
         afterWrite(key);
     }
     virtual std::optional<LabelVariant> const& getInfo() const {
