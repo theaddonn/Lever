@@ -249,8 +249,9 @@ void publishMatching(std::string_view modId, std::string_view pageId, std::strin
         if (live.map.count(raw)) publish(raw);
 }
 
-/// After a write through a provider: the whole page re-reads, so rows depending on the new value update.
-void afterWrite(const SettingKey& key) { publishMatching(key.modId, key.pageId, {}); }
+/// After a write through a provider: every row of the mod re-reads (its sections share one page), so rows
+/// depending on the new value update wherever they are.
+void afterWrite(const SettingKey& key) { publishMatching(key.modId, {}, {}); }
 
 // IBooleanDataProvider: + getValue, setValue, flush
 struct BoolProvider : ProviderBase {

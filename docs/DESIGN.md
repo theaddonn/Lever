@@ -135,7 +135,7 @@ Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp`:
   button (ActionComponent), banner (BannerComponent), header (TextComponent).
 - Dynamic state: every row carries a state override (the component's optional state function), which maps the
   setting's `getState` callback (visibleWhen / enabledWhen / state on the C++ side) to the game's Enabled /
-  Disabled / Hidden. After a write through any provider of a page, every live component of that page is published,
+  Disabled / Hidden. After a write through any provider of a mod, every live component of that mod is published,
   so the queries re-read values and states and dependent rows appear, disappear or grey out at once.
 - Sliders run in index units: the provider reports the grid index (0..positions-1, integer step), the formatter
   prints the real value. The divider ticks follow the presence of the native step, so they are drawn only for
