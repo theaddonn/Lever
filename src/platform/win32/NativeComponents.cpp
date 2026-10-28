@@ -2,6 +2,7 @@
 
 #include "internal/Host.h"
 #include "internal/Log.h"
+#include "internal/SliderGrid.h"
 
 #include "ll/api/memory/Memory.h"
 #include "mc/client/options/IOptionRegistry.h"
@@ -28,7 +29,6 @@
 #include <new>
 #include <optional>
 #include <unordered_map>
-#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -132,69 +132,30 @@ void* beginHandBuilt(
 // Bedrock::PubSub::Subscription mSubscription (+0x48, 16 bytes). Virtual order: dtor, setChangeListener, canModify.
 // The SDK class cannot be used as a base (its Subscription has no usable constructor), so this mirrors it.
 
-struct ProviderBase;
-
-// Every provider alive right now (the game destroys them with the page), so notifyChanged can reach them. Leaked on
-// purpose: providers may outlive static destruction order at shutdown. Recursive: a notification can synchronously
-// rebuild widgets, i.e. construct and destroy providers on the same thread.
-struct LiveProviders {
-    std::recursive_mutex              mutex;
-    std::unordered_set<ProviderBase*> set;
-};
-LiveProviders& liveProviders() {
-    static auto* live = new LiveProviders();
-    return *live;
-}
-
 struct ProviderBase {
-    virtual ~ProviderBase() {
-        LiveProviders&                         live = liveProviders();
-        std::lock_guard<std::recursive_mutex> lk(live.mutex);
-        live.set.erase(this);
-    }
+    virtual ~ProviderBase() = default;
     virtual void setChangeListener(std::function<void()> callback) { listener = std::move(callback); }
     virtual bool canModify() const { return true; }
 
     std::function<void()> listener;
     unsigned char         subscription[16]{};
 
-    explicit ProviderBase(SettingKey k) : key(std::move(k)) { track(); }
-    ProviderBase() { track(); }
+    explicit ProviderBase(SettingKey k) : key(std::move(k)) {}
+    ProviderBase() = default;
     ProviderBase(const ProviderBase&)            = delete;
     ProviderBase& operator=(const ProviderBase&) = delete;
 
     SettingKey key;
-
-    /// Vanilla providers call the listener after a write; the queries re-read the value on it. Without this the
-    /// screen shows the old value again.
-    void notify() const {
-        if (listener) listener();
-    }
-
-    bool matches(std::string_view modId, std::string_view pageId, std::string_view settingId) const {
-        return key.modId == modId && (pageId.empty() || key.pageId == pageId)
-            && (settingId.empty() || key.settingId == settingId);
-    }
 
     /// Runs fn(setting) under the host model lock if the setting still exists.
     template <class Fn>
     void with(Fn&& fn) const {
         Registry&                   m = host::model();
         std::lock_guard<std::mutex> lk(m.mutex);
-        if (Page* p = m.findPage(key.modId, key.pageId))
-            if (Setting* s = m.findSetting(*p, key.settingId)) fn(*s);
+        if (Setting* s = m.findSetting(key.modId, key.pageId, key.settingId)) fn(*s);
     }
-
-private:
-    void track();
 };
 static_assert(offsetof(ProviderBase, listener) == 0x08, "IDataProvider layout");
-
-void ProviderBase::track() {
-    LiveProviders&                         live = liveProviders();
-    std::lock_guard<std::recursive_mutex> lk(live.mutex);
-    live.set.insert(this);
-}
 
 static_assert(sizeof(std::function<void()>) == 64, "MSVC std::function size");
 
@@ -204,6 +165,92 @@ void wireChangeListener(void* raw, ProviderBase* provider) {
         reinterpret_cast<void (*)(void*)>(fn)(static_cast<unsigned char*>(raw) + 0x140);
     }));
 }
+
+// ---- dynamic state (Enabled / Disabled / Hidden) ----
+//
+// Component base +0xf8..+0x138: std::optional<std::function<SettingsState(const Component&, const SettingsState&)>>
+// (the std::function is 0x40 bytes with its impl pointer at +0x130; the engaged byte is +0x138). The shared
+// getDefaultState (vtable slot 1) asks the class for its default and, when the optional is engaged, hands it to this
+// function and returns the result. Native SettingsState values: Hidden 0, Disabled 1, Enabled 2. The queries
+// re-read the state whenever the component's pub/sub block publishes, i.e. on the same path as a value change.
+constexpr std::size_t kStateFnOffset      = 0xf8;
+constexpr std::size_t kStateEngagedOffset = 0x138;
+constexpr int         kNativeHidden = 0, kNativeDisabled = 1, kNativeEnabled = 2;
+
+struct NativeComponent; // opaque: the game's Settings::Component, passed by reference
+using StateFn = std::function<int(const NativeComponent&, const int&)>;
+static_assert(sizeof(StateFn) == 64, "MSVC std::function size");
+
+// Every component we built that is alive right now (the game destroys them with the page). The state functor owns a
+// Token, so a component's destruction (which destroys the functor) removes it. Leaked on purpose (shutdown order);
+// recursive because a publish may synchronously rebuild components on the same thread.
+struct LiveComponents {
+    std::recursive_mutex                        mutex;
+    std::unordered_map<void*, SettingKey>       map;
+};
+LiveComponents& liveComponents() {
+    static auto* live = new LiveComponents();
+    return *live;
+}
+struct Token {
+    void* raw;
+    explicit Token(void* r) : raw(r) {}
+    ~Token() {
+        LiveComponents&                        live = liveComponents();
+        std::lock_guard<std::recursive_mutex> lk(live.mutex);
+        live.map.erase(raw);
+    }
+    Token(const Token&)            = delete;
+    Token& operator=(const Token&) = delete;
+};
+
+int nativeState(int leverState) {
+    switch (leverState) {
+    case LEVER_STATE_DISABLED: return kNativeDisabled;
+    case LEVER_STATE_HIDDEN: return kNativeHidden;
+    default: return kNativeEnabled;
+    }
+}
+
+/// Installs the state override on a built component: the setting's current LEVER_STATE_* (stateOf) wins over the
+/// class default unless it is Enabled, in which case the class default (e.g. Disabled for a read-only provider) stays.
+void installState(void* raw, const SettingKey& key) {
+    {
+        LiveComponents&                        live = liveComponents();
+        std::lock_guard<std::recursive_mutex> lk(live.mutex);
+        live.map[raw] = key;
+    }
+    auto token = std::make_shared<Token>(raw);
+    new (at<void>(raw, kStateFnOffset)) StateFn([key, token](const NativeComponent&, const int& defaultState) {
+        int st = LEVER_STATE_ENABLED;
+        {
+            Registry&                   m = host::model();
+            std::lock_guard<std::mutex> lk(m.mutex);
+            if (Setting* s = m.findSetting(key.modId, key.pageId, key.settingId)) st = stateOf(*s);
+        }
+        return st == LEVER_STATE_ENABLED ? defaultState : nativeState(st);
+    });
+    *at<unsigned char>(raw, kStateEngagedOffset) = 1;
+}
+
+void publish(void* raw) {
+    reinterpret_cast<void (*)(void*)>(imageBase() + kPublishChanged)(static_cast<unsigned char*>(raw) + 0x140);
+}
+
+/// Publishes every live component whose key matches (empty pageId / settingId = any): values and states are re-read.
+void publishMatching(std::string_view modId, std::string_view pageId, std::string_view settingId) {
+    LiveComponents&                        live = liveComponents();
+    std::lock_guard<std::recursive_mutex> lk(live.mutex);
+    std::vector<void*> hit; // snapshot: a publish may rebuild components and change the map
+    for (auto& [raw, key] : live.map)
+        if (key.modId == modId && (pageId.empty() || key.pageId == pageId) && (settingId.empty() || key.settingId == settingId))
+            hit.push_back(raw);
+    for (void* raw : hit)
+        if (live.map.count(raw)) publish(raw);
+}
+
+/// After a write through a provider: the whole page re-reads, so rows depending on the new value update.
+void afterWrite(const SettingKey& key) { publishMatching(key.modId, key.pageId, {}); }
 
 // IBooleanDataProvider: + getValue, setValue, flush
 struct BoolProvider : ProviderBase {
@@ -215,38 +262,38 @@ struct BoolProvider : ProviderBase {
     }
     virtual void setValue(bool value) {
         with([&](Setting& s) { if (s.setBool) s.setBool(value); });
-        notify();
+        afterWrite(key);
     }
     virtual bool flush() { return false; }
 };
 
 // INumberDataProvider<float>: + getValue, setValue, getMin, getMax, flush (slots 3..7 as the game calls them);
 // extra trailing slots guard against a longer real interface.
+//
+// Speaks index units (SliderGrid): the UI sees 0..positions-1 with a step of 1, which keeps the knob exact for any
+// step and lets us choose whether the dividers are drawn (they follow the presence of the native step).
 struct FloatProvider : ProviderBase {
     using ProviderBase::ProviderBase;
+    SliderGrid grid() const {
+        SliderGrid g;
+        with([&](Setting& s) { g = SliderGrid::of(s.min, s.max, s.step); });
+        return g;
+    }
     virtual float getValue() const {
-        double v = 0;
-        with([&](Setting& s) { if (s.getNumber) v = s.getNumber(); });
-        return static_cast<float>(v);
-    }
-    virtual void setValue(float value) {
+        int index = 0;
         with([&](Setting& s) {
-            double v = static_cast<double>(value);
-            if (s.step > 0) v = std::round(v / s.step) * s.step; // the UI snaps to the step grid in float
-            if (s.setNumber) s.setNumber(v);
+            if (s.getNumber) index = SliderGrid::of(s.min, s.max, s.step).indexOf(s.getNumber());
         });
-        notify();
+        return static_cast<float>(index);
     }
-    virtual float getMin() const {
-        double v = 0;
-        with([&](Setting& s) { v = s.min; });
-        return static_cast<float>(v);
+    virtual void setValue(float index) {
+        with([&](Setting& s) {
+            if (s.setNumber) s.setNumber(SliderGrid::of(s.min, s.max, s.step).valueAt(static_cast<int>(std::lround(index))));
+        });
+        afterWrite(key);
     }
-    virtual float getMax() const {
-        double v = 1;
-        with([&](Setting& s) { v = s.max; });
-        return static_cast<float>(v);
-    }
+    virtual float getMin() const { return 0.0f; }
+    virtual float getMax() const { return static_cast<float>(grid().positions - 1); }
     virtual bool flush() { return false; }
     virtual bool reserved0() { return false; }
     virtual bool reserved1() { return false; }
@@ -275,7 +322,7 @@ struct StringProvider : ProviderBase {
         std::string v = std::move(*pending);
         pending.reset();
         with([&](Setting& s) { if (s.setString) s.setString(v); });
-        notify();
+        afterWrite(key);
     }
     virtual bool flush() { return false; }
 };
@@ -318,7 +365,7 @@ struct OptionsProvider : ProviderBase {
             if (asToggle) { if (s.setBool) s.setBool(index != 0); }
             else if (s.setIndex) s.setIndex(index);
         });
-        notify();
+        afterWrite(key);
     }
     virtual std::optional<LabelVariant> const& getInfo() const {
         static const std::optional<LabelVariant> none;
@@ -430,14 +477,7 @@ bool togglesSupported() { return booleanVtable() != 0; }
 
 void notifyChanged(std::string_view modId, std::string_view pageId, std::string_view settingId) {
     if (modId.empty()) return;
-    LiveProviders&                         live = liveProviders();
-    std::lock_guard<std::recursive_mutex> lk(live.mutex);
-    // Snapshot: a listener may rebuild widgets and change the set while we iterate.
-    std::vector<ProviderBase*> hit;
-    for (ProviderBase* p : live.set)
-        if (p->key.modId.size() && p->matches(modId, pageId, settingId)) hit.push_back(p);
-    for (ProviderBase* p : hit)
-        if (live.set.count(p)) p->notify();
+    publishMatching(modId, pageId, settingId);
 }
 
 
@@ -476,46 +516,34 @@ Element makeToggle(std::string_view id, const Setting& s, SettingKey key) {
     return finish(raw, kBoolean);
 }
 
-// The slider's JavaScript builds its knob positions as floor((max - min) / step) + 1 values from the float32
-// step converted to double, so a step whose float32 is slightly above the true value (0.05f = 0.05000000074...)
-// loses one position and the knob rests ~3 % right of the value. Nudge the float32 step down until the count
-// comes out as intended.
-float uiStep(double min, double max, double step) {
-    float fmin = static_cast<float>(min), fmax = static_cast<float>(max), fs = static_cast<float>(step);
-    if (!(step > 0) || !(max > min) || !(fs > 0)) return fs;
-    double want = std::round((max - min) / step);
-    double span = static_cast<double>(fmax) - static_cast<double>(fmin);
-    for (int i = 0; i < 16 && std::floor(span / static_cast<double>(fs)) < want; ++i)
-        fs = std::nextafter(fs, 0.0f);
-    return fs;
-}
-
 Element makeSlider(std::string_view id, const Setting& s, SettingKey key) {
     void* raw = beginHandBuilt(id, s.label, descOf(id, s), kTypeNumber, kVtNumberFloat);
     if (!raw) return nullptr;
     // NumberComponent<float>: +0x1e0 provider, +0x1e8 float scale, +0x1ec optional<float> step (+0x1f0 engaged),
-    // +0x1f8 std::function formatter
-    auto* provider                    = new FloatProvider(std::move(key));
+    // +0x1f8 std::function formatter. The provider speaks index units (see FloatProvider), so scale is 1 and the
+    // step, when present, is 1. The JavaScript draws the divider ticks iff a step is present (and uses 1 otherwise),
+    // which is how SliderGrid::showSteps takes effect.
+    auto* provider                    = new FloatProvider(key);
     *at<ProviderBase*>(raw, kDerived) = provider;
     wireChangeListener(raw, provider);
     *at<float>(raw, kDerived + 0x08) = 1.0f;
-    if (s.step > 0) {
-        *at<float>(raw, kDerived + 0x0c) = uiStep(s.min, s.max, s.step);
+    const SliderGrid grid            = SliderGrid::of(s.min, s.max, s.step);
+    if (grid.showSteps(s.flags)) {
+        *at<float>(raw, kDerived + 0x0c) = 1.0f;
         *at<bool>(raw, kDerived + 0x10)  = true;
     }
-    // Value text formatter at +0x1f8: SettingsNumberQuery (0xbb049a6) calls it as
-    // optional<string>(const float& value, const float& min, const float& max) with the value already scaled and
-    // snapped to the step. A disengaged (or missing) result makes the JavaScript print the raw float32
-    // (0.05000000074505806). Decimals follow the step: 0.05 -> 2, 1 -> 0, none -> 0.
-    int decimals = 0;
-    if (s.step > 0 && s.step < 1) decimals = static_cast<int>(std::ceil(-std::log10(s.step) - 1e-9));
-    if (decimals > 6) decimals = 6;
+    // Value text formatter at +0x1f8: SettingsNumberQuery calls it as optional<string>(const float& value, const
+    // float& min, const float& max) with the (index) value. A disengaged result would make the JavaScript print the
+    // raw float, so it always answers with the real value printed to the grid's decimals.
     new (at<void>(raw, kDerived + 0x18))
         std::function<std::optional<std::string>(const float&, const float&, const float&)>(
-            [decimals](const float& value, const float&, const float&) {
-                char buf[48];
-                std::snprintf(buf, sizeof buf, "%.*f", decimals, static_cast<double>(value));
-                return std::optional<std::string>(buf);
+            [key](const float& index, const float&, const float&) {
+                std::string text;
+                Registry&                   m = host::model();
+                std::lock_guard<std::mutex> lk(m.mutex);
+                if (Setting* st = m.findSetting(key.modId, key.pageId, key.settingId))
+                    text = SliderGrid::of(st->min, st->max, st->step).format(static_cast<int>(std::lround(index)));
+                return std::optional<std::string>(std::move(text));
             }
         );
     return finish(raw, kNumberFloat);
@@ -593,23 +621,26 @@ Element makeBanner(std::string_view id, const Setting& s) {
 }
 
 Element makeSetting(std::string_view id, const Setting& s, SettingKey key) {
+    Element e;
     switch (s.kind) {
     case LEVER_KIND_TOGGLE:
-        if (togglesSupported()) return makeToggle(id, s, std::move(key));
-        {
+        if (togglesSupported()) e = makeToggle(id, s, key);
+        else {
             // fallback: a two-entry dropdown bound to the bool callbacks
             Setting d = s;
             d.options = {"Off", "On"};
-            return makeDropdown(id, d, std::move(key), /*asToggle=*/true);
+            e         = makeDropdown(id, d, key, /*asToggle=*/true);
         }
-    case LEVER_KIND_SLIDER: return makeSlider(id, s, std::move(key));
-    case LEVER_KIND_DROPDOWN: return makeDropdown(id, s, std::move(key));
-    case LEVER_KIND_TEXT_FIELD: return makeTextField(id, s, std::move(key));
-    case LEVER_KIND_BUTTON: return makeButton(id, s, std::move(key));
-    case LEVER_KIND_BANNER: return makeBanner(id, s);
-    case LEVER_KIND_HEADER: return makeText(id, s.label, descOf(id, s));
+        break;
+    case LEVER_KIND_SLIDER: e = makeSlider(id, s, key); break;
+    case LEVER_KIND_DROPDOWN: e = makeDropdown(id, s, key); break;
+    case LEVER_KIND_TEXT_FIELD: e = makeTextField(id, s, key); break;
+    case LEVER_KIND_BUTTON: e = makeButton(id, s, key); break;
+    case LEVER_KIND_BANNER: e = makeBanner(id, s); break;
+    case LEVER_KIND_HEADER: e = makeText(id, s.label, descOf(id, s)); break;
     }
-    return nullptr;
+    if (e) installState(e.get(), key); // every row can be hidden / disabled by its conditions
+    return e;
 }
 
 } // namespace lever::detail::native

@@ -1,5 +1,6 @@
 // Minimal LeviLamina client mod that embeds Lever. It shows the intended call pattern: register in enable(),
-// unregister in disable(), and call notifyChanged() when values change behind the UI's back.
+// unregister in disable(), bind rows to variables, make rows depend on each other, persist from onChange() and call
+// notifyChanged() when values change behind the UI's back.
 
 #include "lever/Lever.h"
 
@@ -11,10 +12,13 @@
 namespace example {
 
 namespace {
-bool        gEnabled = true;
-double      gStrength = 0.5;
-int         gMode = 0;
-std::string gName = "Steve";
+bool        gEnabled     = true;
+double      gStrength    = 0.5;
+int         gMode        = 0;
+std::string gName        = "Steve";
+bool        gAutoThreads = true;
+int         gThreads     = 4;
+int         gBrightness  = 50;
 } // namespace
 
 class ExampleMod {
@@ -30,19 +34,30 @@ public:
 
     bool enable() {
         using namespace lever;
-        registerMod({"lever_example", "Lever Example", {0, 1, 0}, "theaddonn", "Shows how to embed Lever."});
-        addPage("lever_example", "main", "Example", "creator")
-            .showIn(Surface::PauseMenu)
-            .addHeader("h1", "General", "Everything is buffered until a host exists")
-            .addToggle("enabled", "Enabled", "Master switch", [] { return gEnabled; }, [](bool v) { gEnabled = v; })
-            .addSlider("strength", "Strength", "How much", 0.0, 1.0, 0.05, [] { return gStrength; }, [](double v) { gStrength = v; })
-            .addDropdown("mode", "Mode", "Pick one", {"Low", "Medium", "High"}, [] { return gMode; }, [](int v) { gMode = v; })
-            .addTextField("name", "Name", "Free text", [] { return gName; }, [](const std::string& v) { gName = v; })
-            .addButton("reset", "Reset", "Restore defaults", [] {
-                gEnabled = true, gStrength = 0.5, gMode = 0, gName = "Steve";
-                notifyChanged("lever_example", "main"); // the open widgets re-read their getters
-            })
-            .addBanner("b1", "Pre-alpha: values are not persisted across restarts.", BannerKind::Warning);
+        Mod& mod = registerMod({"lever_example", "Lever Example", {0, 2, 0}, "theaddonn", "Shows how to embed Lever."});
+
+        Section& general = mod.section("general", "General");
+        general.banner("b1", "Pre-alpha: values are not persisted across restarts.", BannerKind::Warning);
+        general.toggle("enabled", "Enabled", gEnabled).description("Master switch; the rows below follow it");
+        general.slider("strength", "Strength", gStrength, 0.0, 1.0, 0.05)
+            .description("21 positions: no divider ticks")
+            .enabledWhen([] { return gEnabled; });
+        general.slider("brightness", "Brightness", gBrightness, 0, 100, 10)
+            .description("11 positions: ticks forced on")
+            .showSteps(true)
+            .enabledWhen([] { return gEnabled; });
+        general.dropdown("mode", "Mode", gMode, {"Low", "Medium", "High"}).visibleWhen([] { return gEnabled; });
+        general.textField("name", "Name", gName).description("Applied when the field loses focus");
+
+        Section& threads = mod.section("threads", "Threads");
+        threads.toggle("auto", "Automatic thread count", gAutoThreads).description("Off shows a manual override");
+        threads.slider("count", "Threads", gThreads, 1, 32, 1).visibleWhen([] { return !gAutoThreads; });
+        threads.button("reset", "Reset", [&] {
+            gEnabled = true, gStrength = 0.5, gMode = 0, gName = "Steve", gAutoThreads = true, gThreads = 4, gBrightness = 50;
+            mod.notifyChanged(); // the open rows re-read their values and states
+        });
+
+        mod.onChange([this] { mSelf.getLogger().info("a value changed through the settings screen"); });
         mSelf.getLogger().info("Lever {} embedded", libraryVersion());
         return true;
     }

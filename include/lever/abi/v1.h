@@ -52,6 +52,17 @@ typedef enum LeverBannerKind {
     LEVER_BANNER_SUCCESS = 3
 } LeverBannerKind;
 
+/* Values returned by LeverSettingCallbacks::getState. Unknown values are treated as ENABLED. */
+typedef enum LeverState {
+    LEVER_STATE_ENABLED = 0,  /* normal */
+    LEVER_STATE_DISABLED = 1, /* shown greyed out, not editable */
+    LEVER_STATE_HIDDEN = 2    /* row not shown */
+} LeverState;
+
+/* LeverSettingDesc::flags bits. Unknown bits are ignored. */
+#define LEVER_SETTING_FLAG_SHOW_STEPS (1u << 0) /* slider: always draw the step dividers */
+#define LEVER_SETTING_FLAG_HIDE_STEPS (1u << 1) /* slider: never draw them (default: host decides from the position count) */
+
 /*
  * Descriptors. Every one starts with `size`, the sizeof() of the struct as the CALLER saw it. The host reads
  * min(size, its own sizeof) bytes and treats everything past `size` as zero / default. It rejects a descriptor only
@@ -71,6 +82,7 @@ typedef struct LeverModInfo {
 } LeverModInfo;
 #define LEVER_MODINFO_V1_MIN_SIZE LEVER_FIELD_END(LeverModInfo, id)
 
+/* A "page" is one titled section of the mod's single settings page (every mod gets one nav entry under "Mods"). */
 typedef struct LeverPageDesc {
     uint32_t    size; /* sizeof(LeverPageDesc) */
     uint32_t    reserved0;
@@ -104,6 +116,10 @@ typedef struct LeverSettingCallbacks {
     void (*setString)(void* user, const char* value);
     void (*onClick)(void* user);
     void (*release)(void* user);
+    /* Appended (descriptor growth, no interface version bump): the current LeverState of the widget. Re-read after
+     * every write made through the UI on the same page and on notifyChanged, so a widget can depend on another
+     * one's value. NULL = always enabled. */
+    int32_t (*getState)(void* user);
 } LeverSettingCallbacks;
 #define LEVER_SETTINGCALLBACKS_V1_MIN_SIZE LEVER_FIELD_END(LeverSettingCallbacks, user)
 
@@ -130,7 +146,7 @@ typedef struct LeverSettingDesc {
     uint32_t           optionCount;
     uint32_t           bannerKind; /* LeverBannerKind */
     uint32_t           maxLength;  /* 0 = default (256) */
-    uint32_t           flags;      /* reserved, 0 */
+    uint32_t           flags;      /* LEVER_SETTING_FLAG_* mask, 0 = defaults */
     const LeverSettingCallbacks* callbacks; /* may be NULL (inert widget) */
 } LeverSettingDesc;
 #define LEVER_SETTINGDESC_V1_MIN_SIZE LEVER_FIELD_END(LeverSettingDesc, id)
@@ -141,7 +157,7 @@ typedef struct LeverSettingDesc {
  */
 typedef struct LeverRegistryV1 {
     uint32_t size;    /* sizeof(LeverRegistryV1) */
-    uint32_t version; /* 2 */
+    uint32_t version; /* 3 */
     int (*registerMod)(const LeverModInfo* info);
     int (*unregisterMod)(const char* modId); /* drops the mod with all pages and settings (release callbacks run) */
     int (*registerPage)(const LeverPageDesc* page);
@@ -150,6 +166,10 @@ typedef struct LeverRegistryV1 {
     /* version 2: tells the host that values changed behind the UI's back (a keybind, a reset, a config reload), so
      * open widgets re-read their getters. NULL or empty pageId / settingId act as wildcards. Game thread only. */
     int (*notifyChanged)(const char* modId, const char* pageId, const char* settingId);
+    /* version 3: replaces the static fields (label, description, min/max/step, options, bannerKind, maxLength, flags)
+     * of a setting that addSetting accepted earlier; `kind` and `callbacks` are ignored. Widgets already on screen pick
+     * the new label/description up the next time the page is built. */
+    int (*updateSetting)(const LeverSettingDesc* setting);
 } LeverRegistryV1;
 
 /* lever.host.v1: what the elected host is and can do. */

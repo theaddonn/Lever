@@ -15,7 +15,7 @@ target("lever_tests")
     -- Everything of the library except src/platform/ (Windows + LeviLamina); tests/stubs replaces Platform.
     add_files("../src/Api.cpp", "../src/internal/*.cpp")
     add_files("main.cpp", "stubs/*.cpp", "unit/*.cpp")
-    add_defines("LEVER_VERSION_STRING=\"0.1.0\"", "LEVER_VERSION_MAJOR=0", "LEVER_VERSION_MINOR=1", "LEVER_VERSION_PATCH=0")
+    add_defines("LEVER_VERSION_STRING=\"0.2.0\"", "LEVER_VERSION_MAJOR=0", "LEVER_VERSION_MINOR=2", "LEVER_VERSION_PATCH=0")
     add_defines("DOCTEST_CONFIG_SUPER_FAST_ASSERTS")
     add_cxflags("-Wall", "-Wextra")
     if is_mode("debug") then

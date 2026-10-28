@@ -26,9 +26,10 @@ static_assert(OFF(LeverPageDesc, modId) == 8 && OFF(LeverPageDesc, pageId) == 16
 static_assert(OFF(LeverPageDesc, icon) == 32 && OFF(LeverPageDesc, surfaces) == 40);
 static_assert(LEVER_PAGEDESC_V1_MIN_SIZE == 24);
 
-static_assert(sizeof(LeverSettingCallbacks) == 96);
+static_assert(sizeof(LeverSettingCallbacks) == 104);
 static_assert(OFF(LeverSettingCallbacks, user) == 8 && OFF(LeverSettingCallbacks, getBool) == 16);
 static_assert(OFF(LeverSettingCallbacks, onClick) == 80 && OFF(LeverSettingCallbacks, release) == 88);
+static_assert(OFF(LeverSettingCallbacks, getState) == 96); // 0.2.0 append
 static_assert(LEVER_SETTINGCALLBACKS_V1_MIN_SIZE == 16);
 
 static_assert(sizeof(LeverSettingDesc) == 104);
@@ -39,11 +40,12 @@ static_assert(OFF(LeverSettingDesc, bannerKind) == 84 && OFF(LeverSettingDesc, m
 static_assert(OFF(LeverSettingDesc, callbacks) == 96);
 static_assert(LEVER_SETTINGDESC_V1_MIN_SIZE == 32);
 
-static_assert(sizeof(LeverRegistryV1) == 56);
+static_assert(sizeof(LeverRegistryV1) == 64);
 static_assert(OFF(LeverRegistryV1, version) == 4 && OFF(LeverRegistryV1, registerMod) == 8);
 static_assert(OFF(LeverRegistryV1, unregisterMod) == 16 && OFF(LeverRegistryV1, registerPage) == 24);
 static_assert(OFF(LeverRegistryV1, setPageSurfaces) == 32 && OFF(LeverRegistryV1, addSetting) == 40);
 static_assert(OFF(LeverRegistryV1, notifyChanged) == 48); // version 2 append
+static_assert(OFF(LeverRegistryV1, updateSetting) == 56); // version 3 append
 
 static_assert(sizeof(LeverHostV1) == 24);
 static_assert(OFF(LeverHostV1, getFeatures) == 8 && OFF(LeverHostV1, isActivated) == 16);
@@ -56,4 +58,6 @@ TEST_CASE("abi: generation and constants are frozen") {
     CHECK(LEVER_KIND_HEADER == 6);
     CHECK(LEVER_SURFACE_WORLD_CREATION == 4u);
     CHECK(LEVER_E_SIZE == 5);
+    CHECK(LEVER_STATE_HIDDEN == 2);
+    CHECK(LEVER_SETTING_FLAG_HIDE_STEPS == 2u);
 }

@@ -207,12 +207,13 @@ TEST_CASE("compat: queryInterface returns null for unknown names and too-high ve
 
     const void* reg = b->queryInterface(LEVER_IFACE_REGISTRY_V1, 1);
     REQUIRE(reg);
-    CHECK(static_cast<const LeverRegistryV1*>(reg)->version == 2);
+    CHECK(static_cast<const LeverRegistryV1*>(reg)->version == 3);
     CHECK(b->queryInterface(LEVER_IFACE_REGISTRY_V1, 0) == reg);
     CHECK(b->queryInterface(LEVER_IFACE_REGISTRY_V1, 2) == reg);       // the version-2 append is served
+    CHECK(b->queryInterface(LEVER_IFACE_REGISTRY_V1, 3) == reg);       // and the version-3 one
     CHECK(b->queryInterface(LEVER_IFACE_HOST_V1, 1) != nullptr);
 
-    CHECK(b->queryInterface(LEVER_IFACE_REGISTRY_V1, 3) == nullptr);   // newer revision than served
+    CHECK(b->queryInterface(LEVER_IFACE_REGISTRY_V1, 4) == nullptr);   // newer revision than served
     CHECK(b->queryInterface(LEVER_IFACE_REGISTRY_V1, 0xFFFFFFFFu) == nullptr);
     CHECK(b->queryInterface("lever.registry.v2", 1) == nullptr);       // no such generation (yet)
     CHECK(b->queryInterface("lever.registry", 1) == nullptr);          // exact match only

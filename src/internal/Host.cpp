@@ -28,21 +28,29 @@ struct Cookie {
     }
 };
 
-Setting toSetting(const LeverSettingDesc& d, const std::shared_ptr<Cookie>& c) {
-    Setting s;
-    s.owner       = c;
-    s.id          = copyString(d.id);
+// The static fields of a descriptor (shared by addSetting and updateSetting). Members past the descriptor's `size`
+// read as zero, i.e. default.
+void applyStatic(const LeverSettingDesc& d, Setting& s) {
     s.label       = copyString(d.label);
     s.description = copyString(d.description);
-    s.kind        = static_cast<LeverKind>(d.kind);
     if (LEVER_DESC_HAS(LeverSettingDesc, d, step)) {
         s.min = d.min, s.max = d.max, s.step = d.step;
     }
     s.bannerKind = d.bannerKind <= LEVER_BANNER_SUCCESS ? static_cast<LeverBannerKind>(d.bannerKind) : LEVER_BANNER_INFO;
     s.maxLength  = d.maxLength ? d.maxLength : 256;
+    s.flags      = d.flags;
+    s.options.clear();
     if (LEVER_DESC_HAS(LeverSettingDesc, d, optionCount)) {
         for (std::uint32_t i = 0; d.options && i < d.optionCount; ++i) s.options.push_back(copyString(d.options[i]));
     }
+}
+
+Setting toSetting(const LeverSettingDesc& d, const std::shared_ptr<Cookie>& c) {
+    Setting s;
+    s.owner = c;
+    s.id    = copyString(d.id);
+    s.kind  = static_cast<LeverKind>(d.kind);
+    applyStatic(d, s);
 
     // Each wrapper captures the shared cookie so the user pointer stays valid while the setting exists. Members past
     // the callback struct's `size` read as zero, i.e. absent.
@@ -62,6 +70,7 @@ Setting toSetting(const LeverSettingDesc& d, const std::shared_ptr<Cookie>& c) {
     };
     if (cb.setString) s.setString = [c](const std::string& v) { c->cb.setString(c->cb.user, v.c_str()); };
     if (cb.onClick) s.onClick = [c] { c->cb.onClick(c->cb.user); };
+    if (cb.getState) s.getState = [c] { return static_cast<int>(c->cb.getState(c->cb.user)); };
     return s;
 }
 
@@ -137,6 +146,17 @@ int hostAddSetting(const LeverSettingDesc* desc) {
     return LEVER_OK;
 }
 
+int hostUpdateSetting(const LeverSettingDesc* desc) {
+    LeverSettingDesc d;
+    if (int rc = readDescriptor(desc, LEVER_SETTINGDESC_V1_MIN_SIZE, d); rc != LEVER_OK) return rc;
+    if (!d.modId || !d.pageId || !d.id || !*d.id) return LEVER_E_INVALID;
+    std::lock_guard<std::mutex> lk(model().mutex);
+    Setting* s = model().findSetting(d.modId, d.pageId, d.id);
+    if (!s) return LEVER_E_NOT_FOUND;
+    applyStatic(d, *s);
+    return LEVER_OK;
+}
+
 int hostUnregisterMod(const char* modId) {
     if (!modId) return LEVER_E_INVALID;
     std::lock_guard<std::mutex> lk(model().mutex);
@@ -184,13 +204,14 @@ const LeverHostV1 kHostV1 = [] {
 const LeverRegistryV1 kRegistryV1 = [] {
     LeverRegistryV1 v{};
     v.size            = sizeof(LeverRegistryV1);
-    v.version         = 2; // notifyChanged appended
+    v.version         = 3; // 2: notifyChanged, 3: updateSetting
     v.registerMod     = &hostRegisterMod;
     v.unregisterMod   = &hostUnregisterMod;
     v.registerPage    = &hostRegisterPage;
     v.setPageSurfaces = &hostSetPageSurfaces;
     v.addSetting      = &hostAddSetting;
     v.notifyChanged   = &hostNotifyChanged;
+    v.updateSetting   = &hostUpdateSetting;
     return v;
 }();
 

@@ -11,13 +11,24 @@ namespace lever::detail::client {
 namespace {
 
 // ---- C trampolines: `user` is the stable address of the local Setting. ----
+//
+// They read the Setting's std::functions at call time, so modifiers installed after forwarding (conditions, onChange)
+// are honoured without another round trip to the host.
+
+// After a write made through the UI: the widget's, the section's and the mod's onChange hooks, in that order.
+void afterWrite(Setting& s) {
+    if (s.onChange) s.onChange();
+    if (s.page && s.page->onChange) s.page->onChange();
+    if (s.mod && s.mod->onChange) s.mod->onChange();
+}
 
 int          tBool(void* u) { return static_cast<Setting*>(u)->getBool() ? 1 : 0; }
-void         tSetBool(void* u, int v) { static_cast<Setting*>(u)->setBool(v != 0); }
+void         tSetBool(void* u, int v) { auto* s = static_cast<Setting*>(u); s->setBool(v != 0); afterWrite(*s); }
 double       tNumber(void* u) { return static_cast<Setting*>(u)->getNumber(); }
-void         tSetNumber(void* u, double v) { static_cast<Setting*>(u)->setNumber(v); }
+void         tSetNumber(void* u, double v) { auto* s = static_cast<Setting*>(u); s->setNumber(v); afterWrite(*s); }
 std::int32_t tIndex(void* u) { return static_cast<std::int32_t>(static_cast<Setting*>(u)->getIndex()); }
-void         tSetIndex(void* u, std::int32_t v) { static_cast<Setting*>(u)->setIndex(static_cast<int>(v)); }
+void         tSetIndex(void* u, std::int32_t v) { auto* s = static_cast<Setting*>(u); s->setIndex(static_cast<int>(v)); afterWrite(*s); }
+std::int32_t tState(void* u) { return static_cast<std::int32_t>(stateOf(*static_cast<Setting*>(u))); }
 std::size_t  tString(void* u, char* buf, std::size_t cap) {
     const std::string s = static_cast<Setting*>(u)->getString();
     if (buf && cap > 0) {
@@ -27,26 +38,13 @@ std::size_t  tString(void* u, char* buf, std::size_t cap) {
     }
     return s.size();
 }
-void tSetString(void* u, const char* v) { static_cast<Setting*>(u)->setString(v ? v : ""); }
-void tClick(void* u) { static_cast<Setting*>(u)->onClick(); }
+void tSetString(void* u, const char* v) { auto* s = static_cast<Setting*>(u); s->setString(v ? v : ""); afterWrite(*s); }
+void tClick(void* u) { auto* s = static_cast<Setting*>(u); s->onClick(); afterWrite(*s); }
 
-void forwardSetting(const LeverRegistryV1* r, const Mod& mod, const detail::Page& page, Setting& s) {
-    std::vector<const char*> opts;
+// The static part of the descriptor (everything but the callbacks). `opts` must outlive the call.
+LeverSettingDesc describe(const Mod& mod, const detail::Page& page, const Setting& s, std::vector<const char*>& opts) {
+    opts.clear();
     for (const auto& o : s.options) opts.push_back(o.c_str());
-
-    LeverSettingCallbacks cb{};
-    cb.size = sizeof(cb);
-    cb.user = &s;
-    if (s.getBool) cb.getBool = &tBool;
-    if (s.setBool) cb.setBool = &tSetBool;
-    if (s.getNumber) cb.getNumber = &tNumber;
-    if (s.setNumber) cb.setNumber = &tSetNumber;
-    if (s.getIndex) cb.getIndex = &tIndex;
-    if (s.setIndex) cb.setIndex = &tSetIndex;
-    if (s.getString) cb.getString = &tString;
-    if (s.setString) cb.setString = &tSetString;
-    if (s.onClick) cb.onClick = &tClick;
-
     LeverSettingDesc d{};
     d.size        = sizeof(d);
     d.kind        = static_cast<std::uint32_t>(s.kind);
@@ -60,10 +58,41 @@ void forwardSetting(const LeverRegistryV1* r, const Mod& mod, const detail::Page
     d.optionCount = static_cast<std::uint32_t>(opts.size());
     d.bannerKind  = static_cast<std::uint32_t>(s.bannerKind);
     d.maxLength   = s.maxLength;
-    d.callbacks   = &cb;
-    const int rc  = r->addSetting(&d);
+    d.flags       = s.flags;
+    return d;
+}
+
+void forwardSetting(const LeverRegistryV1* r, const Mod& mod, const detail::Page& page, Setting& s) {
+    LeverSettingCallbacks cb{};
+    cb.size = sizeof(cb);
+    cb.user = &s;
+    if (s.getBool) cb.getBool = &tBool;
+    if (s.setBool) cb.setBool = &tSetBool;
+    if (s.getNumber) cb.getNumber = &tNumber;
+    if (s.setNumber) cb.setNumber = &tSetNumber;
+    if (s.getIndex) cb.getIndex = &tIndex;
+    if (s.setIndex) cb.setIndex = &tSetIndex;
+    if (s.getString) cb.getString = &tString;
+    if (s.setString) cb.setString = &tSetString;
+    if (s.onClick) cb.onClick = &tClick;
+    cb.getState = &tState; // always: conditions may be installed after forwarding
+
+    std::vector<const char*> opts;
+    LeverSettingDesc         d = describe(mod, page, s, opts);
+    d.callbacks                = &cb;
+    const int rc               = r->addSetting(&d);
     // UNSUPPORTED = the host does not know this widget kind: dropped for good, not worth retrying.
-    if (rc == LEVER_OK || rc == LEVER_E_UNSUPPORTED) s.forwarded = true;
+    if (rc == LEVER_OK || rc == LEVER_E_UNSUPPORTED) s.forwarded = true, s.dirty = false;
+}
+
+// Static fields changed after forwarding (Widget::label/description/showSteps). A host older than registry
+// version 3 cannot take them: the change is dropped (the host keeps what it was given at registration).
+void updateSetting(const LeverRegistryV1* r, const Mod& mod, const detail::Page& page, Setting& s) {
+    s.dirty = false;
+    if (!LEVER_IFACE_HAS(LeverRegistryV1, r, updateSetting)) return;
+    std::vector<const char*> opts;
+    LeverSettingDesc         d = describe(mod, page, s, opts);
+    r->updateSetting(&d);
 }
 
 bool complete(const LeverRegistryV1* r) {
@@ -130,6 +159,7 @@ void forwardAll(Registry& reg, const LeverRegistryV1* iface) {
             }
             for (auto& s : page.settings) {
                 if (!s.forwarded) forwardSetting(iface, mod, page, s);
+                else if (s.dirty) updateSetting(iface, mod, page, s);
             }
         }
     }

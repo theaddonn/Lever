@@ -94,10 +94,9 @@ TEST_CASE("election: invalid bootstraps are not registered") {
 
 TEST_CASE("client: registrations are buffered until the host is attached, then forwarded in order") {
     resetAll();
-    CHECK(registerMod({"mymod", "My Mod", {1, 2, 3}, "me", "does things"}));
-    addPage("mymod", "main", "Main", "creator")
-        .showIn(Surface::PauseMenu)
-        .addToggle("on", "On", "", [] { return true; }, [](bool) {});
+    lever::Mod& mod = registerMod({"mymod", "My Mod", {1, 2, 3}, "me", "does things"});
+    CHECK(mod.valid());
+    mod.section("main", "Main").showIn(Surface::PauseMenu).toggle("on", "On", [] { return true; }, [](bool) {});
     {
         std::lock_guard<std::mutex> lk(host::model().mutex);
         CHECK(host::model().mods.empty()); // no election yet: buffered locally
@@ -108,17 +107,17 @@ TEST_CASE("client: registrations are buffered until the host is attached, then f
     const HostInfo hi = hostInfo();
     CHECK(hi.attached);
     CHECK(hi.isThisCopy);
-    CHECK(hi.version.minor == 1);
+    CHECK(hi.version.minor == 2);
     CHECK(hi.features == (LEVER_FEATURE_GLOBAL_SETTINGS | LEVER_FEATURE_INFO_PAGES));
 
     std::lock_guard<std::mutex> lk(host::model().mutex);
-    Mod* m = host::model().findMod("mymod");
+    detail::Mod* m = host::model().findMod("mymod");
     REQUIRE(m);
     CHECK(m->info.displayName == "My Mod");
     CHECK(m->info.version.patch == 3);
     detail::Page* p = host::model().findPage("mymod", "main");
     REQUIRE(p);
-    CHECK(p->icon == "creator");
+    CHECK(p->title == "Main");
     CHECK(p->surfaces == (LEVER_SURFACE_GLOBAL_SETTINGS | LEVER_SURFACE_PAUSE_MENU));
     Setting* s = host::model().findSetting(*p, "on");
     REQUIRE(s);
@@ -128,10 +127,10 @@ TEST_CASE("client: registrations are buffered until the host is attached, then f
 TEST_CASE("client: a later change after attach is forwarded, unregister reaches the host") {
     resetAll();
     registerMod({"m", "M", {}, "", ""});
-    Page& page = addPage("m", "p", "P");
+    Section& page = addSection("m", "p", "P");
     REQUIRE(attachNow());
     page.showOnlyIn(Surface::WorldCreation);
-    page.addButton("b", "B", "", [] {});
+    page.button("b", "B", [] {});
     {
         std::lock_guard<std::mutex> lk(host::model().mutex);
         CHECK(host::model().findPage("m", "p")->surfaces == LEVER_SURFACE_WORLD_CREATION);

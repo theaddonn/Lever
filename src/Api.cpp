@@ -18,15 +18,22 @@ namespace lever {
 
 namespace {
 
-using detail::Mod;
 using detail::Registry;
 using detail::Setting;
 using detail::client::local;
 
-// Returned for unknown mod ids so callers can keep chaining without null checks.
-Page& invalidPage() {
-    static Page p("", "", false);
-    return p;
+// Inert handles for unknown ids so callers can keep chaining without null checks.
+Mod& invalidMod() {
+    static Mod m("", false);
+    return m;
+}
+Section& invalidSection() {
+    static Section s("", "", false);
+    return s;
+}
+Widget& invalidWidget() {
+    static Widget w("", "", "", false);
+    return w;
 }
 
 void touch() {
@@ -34,21 +41,24 @@ void touch() {
     detail::client::flush();
 }
 
-void addSetting(const std::string& modId, const std::string& pageId, Setting s) {
+Widget& addSetting(const std::string& modId, const std::string& sectionId, Setting s) {
+    Widget* handle = nullptr;
     {
         std::lock_guard<std::mutex> lk(local().mutex);
-        if (!local().addSetting(modId, pageId, std::move(s))) {
-            detail::logWarn("ignored setting on " + modId + "/" + pageId + " (unknown page or duplicate id)");
-            return;
-        }
+        if (Setting* added = local().addSetting(modId, sectionId, std::move(s))) handle = &added->handle;
+    }
+    if (!handle) {
+        detail::logWarn("ignored row on " + modId + "/" + sectionId + " (unknown section or duplicate id)");
+        return invalidWidget();
     }
     touch();
+    return *handle;
 }
 
-void setSurfaces(const std::string& modId, const std::string& pageId, std::uint32_t mask, bool exclusive) {
+void setSurfaces(const std::string& modId, const std::string& sectionId, std::uint32_t mask, bool exclusive) {
     {
         std::lock_guard<std::mutex> lk(local().mutex);
-        if (auto* p = local().findPage(modId, pageId)) p->surfaces = exclusive ? mask : (p->surfaces | mask);
+        if (auto* p = local().findPage(modId, sectionId)) p->surfaces = exclusive ? mask : (p->surfaces | mask);
     }
     touch();
 }
@@ -62,7 +72,7 @@ std::uint32_t surfaceBit(Surface s) {
     return 0;
 }
 
-Setting make(std::string_view id, LeverKind kind, std::string_view label, std::string_view description) {
+Setting make(std::string_view id, LeverKind kind, std::string_view label, std::string_view description = {}) {
     Setting s;
     s.id          = std::string(id);
     s.kind        = kind;
@@ -71,87 +81,175 @@ Setting make(std::string_view id, LeverKind kind, std::string_view label, std::s
     return s;
 }
 
+/// Runs fn on the local setting (under the model lock). `isStatic` marks a change the host must be told about
+/// (label, description, flags...); dynamic members (conditions, hooks) are read through the trampolines live.
+template <class Fn>
+void editSetting(const std::string& modId, const std::string& sectionId, const std::string& id, bool isStatic, Fn&& fn) {
+    bool forward = false;
+    {
+        std::lock_guard<std::mutex> lk(local().mutex);
+        Setting* s = local().findSetting(modId, sectionId, id);
+        if (!s) return;
+        fn(*s);
+        if (isStatic && s->forwarded) s->dirty = forward = true;
+    }
+    if (forward) touch();
+}
+
 } // namespace
 
-// ---- Page ----
+// ---- Widget ----
 
-Page& Page::showIn(Surface surface) {
+Widget& Widget::label(std::string_view text) {
+    if (mValid) editSetting(mModId, mSectionId, mId, true, [&](Setting& s) { s.label = std::string(text); });
+    return *this;
+}
+
+Widget& Widget::description(std::string_view text) {
+    if (mValid) editSetting(mModId, mSectionId, mId, true, [&](Setting& s) { s.description = std::string(text); });
+    return *this;
+}
+
+Widget& Widget::visibleWhen(Condition condition) {
+    if (mValid) editSetting(mModId, mSectionId, mId, false, [&](Setting& s) { s.visibleWhen = std::move(condition); });
+    return *this;
+}
+
+Widget& Widget::enabledWhen(Condition condition) {
+    if (mValid) editSetting(mModId, mSectionId, mId, false, [&](Setting& s) { s.enabledWhen = std::move(condition); });
+    return *this;
+}
+
+Widget& Widget::state(StateFn fn) {
+    if (mValid) editSetting(mModId, mSectionId, mId, false, [&](Setting& s) { s.stateFn = std::move(fn); });
+    return *this;
+}
+
+Widget& Widget::onChange(Action fn) {
+    if (mValid) editSetting(mModId, mSectionId, mId, false, [&](Setting& s) { s.onChange = std::move(fn); });
+    return *this;
+}
+
+Widget& Widget::showSteps(bool show) {
+    if (mValid)
+        editSetting(mModId, mSectionId, mId, true, [&](Setting& s) {
+            s.flags &= ~(LEVER_SETTING_FLAG_SHOW_STEPS | LEVER_SETTING_FLAG_HIDE_STEPS);
+            s.flags |= show ? LEVER_SETTING_FLAG_SHOW_STEPS : LEVER_SETTING_FLAG_HIDE_STEPS;
+        });
+    return *this;
+}
+
+Widget& Widget::notifyChanged() {
+    if (mValid) lever::notifyChanged(mModId, mSectionId, mId);
+    return *this;
+}
+
+Section& Widget::section() {
+    if (!mValid) return invalidSection();
+    std::lock_guard<std::mutex> lk(local().mutex);
+    if (auto* p = local().findPage(mModId, mSectionId)) return p->handle;
+    return invalidSection();
+}
+
+// ---- Section ----
+
+Section& Section::showIn(Surface surface) {
     if (mValid) setSurfaces(mModId, mId, surfaceBit(surface), false);
     return *this;
 }
 
-Page& Page::showOnlyIn(Surface surface) {
+Section& Section::showOnlyIn(Surface surface) {
     if (mValid) setSurfaces(mModId, mId, surfaceBit(surface), true);
     return *this;
 }
 
-Page& Page::addHeader(std::string_view id, std::string_view title, std::string_view subtitle) {
-    if (mValid) addSetting(mModId, mId, make(id, LEVER_KIND_HEADER, title, subtitle));
+Section& Section::onChange(Action fn) {
+    if (!mValid) return *this;
+    std::lock_guard<std::mutex> lk(local().mutex);
+    if (auto* p = local().findPage(mModId, mId)) p->onChange = std::move(fn);
     return *this;
 }
 
-Page& Page::addBanner(std::string_view id, std::string_view text, BannerKind kind) {
-    if (!mValid) return *this;
-    Setting s = make(id, LEVER_KIND_BANNER, text, {});
+Widget& Section::header(std::string_view id, std::string_view title, std::string_view subtitle) {
+    if (!mValid) return invalidWidget();
+    return addSetting(mModId, mId, make(id, LEVER_KIND_HEADER, title, subtitle));
+}
+
+Widget& Section::banner(std::string_view id, std::string_view text, BannerKind kind) {
+    if (!mValid) return invalidWidget();
+    Setting s = make(id, LEVER_KIND_BANNER, text);
     switch (kind) {
     case BannerKind::Info: s.bannerKind = LEVER_BANNER_INFO; break;
     case BannerKind::Warning: s.bannerKind = LEVER_BANNER_WARNING; break;
     case BannerKind::Error: s.bannerKind = LEVER_BANNER_ERROR; break;
     case BannerKind::Success: s.bannerKind = LEVER_BANNER_SUCCESS; break;
     }
-    addSetting(mModId, mId, std::move(s));
-    return *this;
+    return addSetting(mModId, mId, std::move(s));
 }
 
-Page& Page::addToggle(std::string_view id, std::string_view label, std::string_view description, BoolGetter getter, BoolSetter setter) {
-    if (!mValid) return *this;
-    Setting s = make(id, LEVER_KIND_TOGGLE, label, description);
+Widget& Section::button(std::string_view id, std::string_view label, Action onClick) {
+    if (!mValid || !onClick) return invalidWidget();
+    Setting s = make(id, LEVER_KIND_BUTTON, label);
+    s.onClick = std::move(onClick);
+    return addSetting(mModId, mId, std::move(s));
+}
+
+Widget& Section::toggle(std::string_view id, std::string_view label, BoolGetter getter, BoolSetter setter) {
+    if (!mValid || !getter || !setter) return invalidWidget();
+    Setting s = make(id, LEVER_KIND_TOGGLE, label);
     s.getBool = std::move(getter);
     s.setBool = std::move(setter);
-    if (s.getBool && s.setBool) addSetting(mModId, mId, std::move(s));
-    return *this;
+    return addSetting(mModId, mId, std::move(s));
 }
 
-Page& Page::addSlider(std::string_view id, std::string_view label, std::string_view description, double min, double max, double step, NumberGetter getter, NumberSetter setter) {
-    if (!mValid) return *this;
-    Setting s = make(id, LEVER_KIND_SLIDER, label, description);
+Widget& Section::slider(std::string_view id, std::string_view label, double min, double max, double step, NumberGetter getter, NumberSetter setter) {
+    if (!mValid || !getter || !setter) return invalidWidget();
+    Setting s = make(id, LEVER_KIND_SLIDER, label);
     s.min = min, s.max = max, s.step = step;
     s.getNumber = std::move(getter);
     s.setNumber = std::move(setter);
-    if (s.getNumber && s.setNumber) addSetting(mModId, mId, std::move(s));
-    return *this;
+    return addSetting(mModId, mId, std::move(s));
 }
 
-Page& Page::addDropdown(std::string_view id, std::string_view label, std::string_view description, std::vector<std::string> options, IndexGetter getter, IndexSetter setter) {
-    if (!mValid) return *this;
-    Setting s = make(id, LEVER_KIND_DROPDOWN, label, description);
+Widget& Section::dropdown(std::string_view id, std::string_view label, std::vector<std::string> options, IndexGetter getter, IndexSetter setter) {
+    if (!mValid || !getter || !setter) return invalidWidget();
+    Setting s = make(id, LEVER_KIND_DROPDOWN, label);
     s.options  = std::move(options);
     s.getIndex = std::move(getter);
     s.setIndex = std::move(setter);
-    if (s.getIndex && s.setIndex) addSetting(mModId, mId, std::move(s));
-    return *this;
+    return addSetting(mModId, mId, std::move(s));
 }
 
-Page& Page::addTextField(std::string_view id, std::string_view label, std::string_view description, StringGetter getter, StringSetter setter, std::uint32_t maxLength) {
-    if (!mValid) return *this;
-    Setting s = make(id, LEVER_KIND_TEXT_FIELD, label, description);
+Widget& Section::textField(std::string_view id, std::string_view label, StringGetter getter, StringSetter setter, std::uint32_t maxLength) {
+    if (!mValid || !getter || !setter) return invalidWidget();
+    Setting s   = make(id, LEVER_KIND_TEXT_FIELD, label);
     s.maxLength = maxLength;
     s.getString = std::move(getter);
     s.setString = std::move(setter);
-    if (s.getString && s.setString) addSetting(mModId, mId, std::move(s));
+    return addSetting(mModId, mId, std::move(s));
+}
+
+Section& Section::notifyChanged(std::string_view widgetId) {
+    if (mValid) lever::notifyChanged(mModId, mId, widgetId);
     return *this;
 }
 
-Page& Page::addButton(std::string_view id, std::string_view label, std::string_view description, Action onClick) {
+// ---- Mod ----
+
+Section& Mod::section(std::string_view sectionId, std::string_view title) {
+    if (!mValid) return invalidSection();
+    return addSection(mId, sectionId, title);
+}
+
+Mod& Mod::onChange(Action fn) {
     if (!mValid) return *this;
-    Setting s = make(id, LEVER_KIND_BUTTON, label, description);
-    s.onClick = std::move(onClick);
-    if (s.onClick) addSetting(mModId, mId, std::move(s));
+    std::lock_guard<std::mutex> lk(local().mutex);
+    if (auto* m = local().findMod(mId)) m->onChange = std::move(fn);
     return *this;
 }
 
-Page& Page::notifyChanged(std::string_view settingId) {
-    if (mValid) lever::notifyChanged(mModId, mId, settingId);
+Mod& Mod::notifyChanged() {
+    if (mValid) lever::notifyChanged(mId);
     return *this;
 }
 
@@ -159,15 +257,19 @@ Page& Page::notifyChanged(std::string_view settingId) {
 
 std::string_view libraryVersion() { return LEVER_VERSION_STRING; }
 
-bool registerMod(const ModInfo& info) {
+Mod& registerMod(const ModInfo& info) {
     detail::platform::ensureInit();
-    bool ok;
+    Mod* handle = nullptr;
     {
         std::lock_guard<std::mutex> lk(local().mutex);
-        ok = local().addMod(info) != nullptr;
+        if (detail::Mod* m = local().addMod(info)) handle = &m->handle;
     }
-    if (ok) touch();
-    return ok;
+    if (!handle) {
+        detail::logWarn("registerMod ignored (empty or duplicate id '" + info.id + "')");
+        return invalidMod();
+    }
+    touch();
+    return *handle;
 }
 
 void unregisterMod(std::string_view modId) {
@@ -175,7 +277,7 @@ void unregisterMod(std::string_view modId) {
     bool              empty;
     {
         std::lock_guard<std::mutex> lk(local().mutex);
-        Mod* mod = local().findMod(id);
+        detail::Mod* mod = local().findMod(id);
         if (!mod) return;
         // Tell the host first so no callback into this DLL can happen after we return.
         if (mod->forwarded) detail::client::unregisterOnHost(id);
@@ -186,20 +288,20 @@ void unregisterMod(std::string_view modId) {
     if (empty) detail::platform::releaseListeners();
 }
 
-Page& addPage(std::string_view modId, std::string_view pageId, std::string_view title, std::string_view icon) {
-    Page* handle = nullptr;
+Section& addSection(std::string_view modId, std::string_view sectionId, std::string_view title) {
+    Section* handle = nullptr;
     {
         std::lock_guard<std::mutex> lk(local().mutex);
-        if (auto* p = local().addPage(modId, pageId, std::string(title), std::string(icon))) handle = &p->handle;
+        if (auto* p = local().addPage(modId, sectionId, std::string(title), std::string())) handle = &p->handle;
     }
-    if (!handle) return invalidPage();
+    if (!handle) return invalidSection();
     touch();
     return *handle;
 }
 
-void notifyChanged(std::string_view modId, std::string_view pageId, std::string_view settingId) {
+void notifyChanged(std::string_view modId, std::string_view sectionId, std::string_view widgetId) {
     if (modId.empty()) return;
-    detail::client::notifyChangedOnHost(std::string(modId), std::string(pageId), std::string(settingId));
+    detail::client::notifyChangedOnHost(std::string(modId), std::string(sectionId), std::string(widgetId));
 }
 
 bool attachNow() {

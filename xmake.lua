@@ -1,5 +1,5 @@
 -- Single source of truth for the library version.
-local LEVER_VERSION = "0.1.0"
+local LEVER_VERSION = "0.2.0"
 set_version(LEVER_VERSION)
 
 add_rules("mode.debug", "mode.release")

@@ -63,21 +63,29 @@ TEST_CASE("refresh: the C++ API reaches the host through the election, and is a 
     lever::notifyChanged("m", "p"); // no host attached yet: dropped, no crash
     CHECK(notifications().empty());
 
-    REQUIRE(lever::registerMod({"m", "Mod", {1, 0, 0}, "", ""}));
-    lever::Page& page = lever::addPage("m", "p", "Page");
+    lever::Mod& mod = lever::registerMod({"m", "Mod", {1, 0, 0}, "", ""});
+    REQUIRE(mod.valid());
+    lever::Section& page = mod.section("p", "Page");
     REQUIRE(page.valid());
+    lever::Widget& w = page.button("s", "S", [] {});
+    REQUIRE(w.valid());
     REQUIRE(lever::attachNow());
 
     page.notifyChanged("s");
     lever::notifyChanged("m");
     page.notifyChanged();
+    w.notifyChanged();
+    mod.notifyChanged();
     lever::notifyChanged(""); // invalid: ignored
-    REQUIRE(notifications().size() == 3);
+    REQUIRE(notifications().size() == 5);
     CHECK(notifications()[0].pageId == "p");
     CHECK(notifications()[0].settingId == "s");
     CHECK(notifications()[1].pageId.empty());
     CHECK(notifications()[2].pageId == "p");
     CHECK(notifications()[2].settingId.empty());
+    CHECK(notifications()[3].settingId == "s");
+    CHECK(notifications()[4].modId == "m");
+    CHECK(notifications()[4].pageId.empty());
 
     lever::unregisterMod("m");
 }
@@ -92,7 +100,7 @@ TEST_CASE("refresh: a host that predates notifyChanged is tolerated") {
     CHECK_FALSE(LEVER_IFACE_HAS(LeverRegistryV1, oldTable, notifyChanged));
     // A table that is big enough but has the slot unset is "not available" as well.
     LeverRegistryV1 unset{};
-    unset.size = sizeof(unset), unset.version = 2;
+    unset.size = sizeof(unset), unset.version = 3;
     const LeverRegistryV1* unsetTable = &unset;
     CHECK_FALSE(LEVER_IFACE_HAS(LeverRegistryV1, unsetTable, notifyChanged));
 }

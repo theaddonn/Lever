@@ -125,12 +125,21 @@ Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp`:
   settings registry lazily on the first settings access, so the hook runs before any settings screen exists. Inside
   the hook the election runs if it has not yet, and only the elected host injects; the other copies pass through.
 - Nav: the `settings-tabs-groups` factory (the list of nav sections) is wrapped to append a "Mods" section
-  (`settings-lever-group`), whose factory lists the overview page `lever-mods` and one entry per registered page
-  (`lever.<mod>.<page>`, titled with the mod's display name, or "Mod: Page" when a mod has several pages). Fallback
-  when the tabs factory is missing: the overview entry is appended to the General section.
-- Pages: the overview page has one text row per registered mod; each mod page is built from the host model on
-  demand: toggle (BooleanComponent), slider (NumberComponent<float>), dropdown (OptionComponent), text field
-  (StringComponent), button (ActionComponent), banner (BannerComponent), header (TextComponent).
+  (`settings-lever-group`), whose factory lists the overview page `lever-mods` and one entry per registered mod
+  (`lever.<mod>`, titled with the mod's display name). Fallback when the tabs factory is missing: the overview entry
+  is appended to the General section.
+- Pages: the overview page has one text row per registered mod. A mod's page lists one GroupInfo per section
+  (`lever.<mod>.<section>`), which the Ore UI renders as a titled group whose rows come from the factory of that id;
+  a mod with a single section gets its rows directly. Rows are built from the host model on demand: toggle
+  (BooleanComponent), slider (NumberComponent<float>), dropdown (OptionComponent), text field (StringComponent),
+  button (ActionComponent), banner (BannerComponent), header (TextComponent).
+- Dynamic state: every row carries a state override (the component's optional state function), which maps the
+  setting's `getState` callback (visibleWhen / enabledWhen / state on the C++ side) to the game's Enabled /
+  Disabled / Hidden. After a write through any provider of a page, every live component of that page is published,
+  so the queries re-read values and states and dependent rows appear, disappear or grey out at once.
+- Sliders run in index units: the provider reports the grid index (0..positions-1, integer step), the formatter
+  prints the real value. The divider ticks follow the presence of the native step, so they are drawn only for
+  sliders with at most 10 positions unless `showSteps` says otherwise.
 - Component elements are built in game-sized raw storage from the game's allocator.
   Text/GroupInfo/Option/Action use their exported constructors; Boolean/Number/String/Banner are hand built: base via
   `TextComponent::$ctor`, then the real vtable, type and derived fields. Data providers are our own classes with the
@@ -143,14 +152,27 @@ Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp`:
 - Late registrations: a page added after the registry was built gets its factory registered into the live registry
   (`platform::registryChanged`, called by the host after every accepted `registerPage`); the nav section and the
   page rows are rebuilt from the model every time they open, so mods, settings and surfaces need nothing more.
-- External value changes: `lever::notifyChanged(mod, page, setting)` (interface `lever.registry.v1` version 2,
-  `notifyChanged`) fires the change listener of every live provider with a matching key, which is the same
-  publisher the vanilla providers use after a write, so the queries re-read the getters. Older hosts without the
-  append are tolerated (the call is dropped). Verified in game 2026-10-26 (the example's Reset button).
+- External value changes: `lever::notifyChanged(mod, section, widget)` (interface `lever.registry.v1` version 2,
+  `notifyChanged`) publishes every live component with a matching key, which is the same publisher the vanilla
+  providers use after a write, so the queries re-read the getters and states. Older hosts without the append are
+  tolerated (the call is dropped). Verified in game 2026-10-26 (the example's Reset button).
+- Modifiers after forwarding: `Widget::label/description/showSteps` on an already forwarded row go through
+  `updateSetting` (`lever.registry.v1` version 3); conditions and `onChange` hooks are read live through the
+  trampolines and need no round trip. Hosts older than version 3 keep the values they were given.
 
 Not yet: the nav icon is the placeholder (the Ore UI icon table is keyed by vanilla page ids); labels are literal strings (a localisation key passed
 as the label is resolved by the game, so mods can ship keys through a resource pack); `installTier2Hooks()` is still
 a stub; the pause-menu and world-creation surfaces are recorded but not rendered.
+
+## In-game check (0.2.0: sections, dependent rows, sliders)
+
+Deploy `bin/LeverExample/`, open Settings -> Mods. Expected: the nav shows "Lever Mods" and "Lever Example" only
+(no per-page entries). The example page has two titled groups, "General" and "Threads". In General: the Strength
+slider (21 positions) has no divider ticks and its label reads 0.50; Brightness (11 positions) has ticks; turning
+"Enabled" off greys out both sliders and hides "Mode" at once; turning it on brings them back. In Threads: "Threads"
+is hidden while "Automatic thread count" is on and appears when it is turned off; Reset restores everything (the
+slider re-hides). Log: `settings: factory lever_example invoked (2 section(s), 2 components)`, then
+`settings: factory lever_example.general invoked (6 components)` and `... lever_example.threads invoked (3 components)`.
 
 ## In-game check (notifyChanged)
 

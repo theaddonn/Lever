@@ -8,7 +8,7 @@ The cross-copy ABI is built for long-term backward compatibility: a frozen boots
 
 ## Status
 
-**Alpha.** The consumer API, the C ABI, host election and the in-process model are in place. The native hook adds a "Mods" section to the vanilla Ore UI settings screen with one page per registered mod page, rendering toggles, sliders, dropdowns, text fields, buttons and banners with the vanilla widgets. Verified in game: the overview page, every widget kind, persistence of edits, descriptions, late registration and `notifyChanged`. [Distant Horizons Bedrock](https://github.com/theaddonn/Distant-Horizons-Bedrock) uses it for its settings. Not yet: custom page icons, the pause-menu entry and the world-creation tab (all need the JavaScript tier, see [docs/DESIGN.md](docs/DESIGN.md)).
+**Alpha.** The consumer API, the C ABI, host election and the in-process model are in place. The native hook adds a "Mods" section to the vanilla Ore UI settings screen with one page per mod, whose sections render toggles, sliders, dropdowns, text fields, buttons and banners with the vanilla widgets. Rows can depend on other values (`visibleWhen` / `enabledWhen`) and are re-evaluated after every edit. Verified in game: the overview page, every widget kind, persistence of edits, descriptions, late registration and `notifyChanged`; the 0.2.0 additions (sections on one page, dependent rows, divider-free sliders) await their in-game check. [Distant Horizons Bedrock](https://github.com/theaddonn/Distant-Horizons-Bedrock) uses it for its settings. Not yet: custom page icons, the pause-menu entry and the world-creation tab (all need the JavaScript tier, see [docs/DESIGN.md](docs/DESIGN.md)).
 
 ## Compatibility
 
@@ -24,11 +24,17 @@ The cross-copy ABI is built for long-term backward compatibility: a frozen boots
 
 bool MyMod::enable() {
     using namespace lever;
-    registerMod({"mymod", "My Mod", {1, 0, 0}, "me", "Does things."});
-    addPage("mymod", "main", "My Mod", "creator")
-        .showIn(Surface::PauseMenu)
-        .addToggle("on", "Enabled", "Master switch", [] { return gOn; }, [](bool v) { gOn = v; })
-        .addSlider("range", "Range", "", 0, 10, 1, [] { return gRange; }, [](double v) { gRange = v; });
+    Mod& mod = registerMod({"mymod", "My Mod", {1, 0, 0}, "me", "Does things."});
+
+    Section& general = mod.section("general", "General");
+    general.toggle("on", "Enabled", gOn).description("Master switch");
+    general.slider("range", "Range", gRange, 0, 10, 1).enabledWhen([] { return gOn; });
+
+    Section& threads = mod.section("threads", "Threads");
+    threads.toggle("auto", "Automatic thread count", gAutoThreads);
+    threads.slider("count", "Threads", gThreads, 1, 32, 1).visibleWhen([] { return !gAutoThreads; });
+
+    mod.onChange([] { saveConfig(); }); // after any edit made through the screen
     return true;
 }
 
@@ -38,7 +44,7 @@ bool MyMod::disable() {
 }
 ```
 
-Calls are safe at any time after the mod is loaded; they are buffered until a host exists. A complete mod is in [example/Example.cpp](example/Example.cpp).
+Every mod gets one entry under Settings -> Mods; its sections are titled groups on that page (a mod with a single section shows its rows directly). Rows bind to a variable by reference or to getter/setter callbacks; modifiers (`description`, `visibleWhen`, `enabledWhen`, `state`, `onChange`, `showSteps`) chain on the returned `Widget&`. Conditions are re-evaluated after every edit on the page and on `notifyChanged()`. Sliders show their step dividers only when they have at most 10 positions (`showSteps` overrides). Calls are safe at any time after the mod is loaded; they are buffered until a host exists. A complete mod is in [example/Example.cpp](example/Example.cpp).
 
 ## Adding it to your build
 
@@ -51,13 +57,13 @@ package("lever")
     set_homepage("https://github.com/theaddonn/Lever")
     set_license("MIT")
     add_urls("https://github.com/theaddonn/Lever.git")
-    add_versions("0.1.0", "<commit sha of the release tag>")
+    add_versions("0.2.0", "<commit sha of the release tag>")
     on_install("windows", function (package)
         import("package.tools.xmake").install(package)
     end)
 package_end()
 
-add_requires("lever 0.1.0")
+add_requires("lever 0.2.0")
 
 target("MyMod")
     -- ... your levibuildscript rules ...
