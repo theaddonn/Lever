@@ -36,7 +36,7 @@ namespace lever::detail::native {
 
 namespace {
 
-// ---- real in-game layout (1.26.51, docs/RE-components.md) ----
+// ---- real in-game layout (1.26.51) ----
 constexpr std::size_t kVariantSize = 0x3d0;
 constexpr std::size_t kIndexOffset = 0x3c8;
 constexpr std::size_t kTypeOffset  = 0x48;  // SettingsType (int) in the component base
@@ -58,7 +58,7 @@ constexpr std::uintptr_t kVtNumberFloat = 0xe7873c0;
 ::IOptionRegistry* gOptions = nullptr;
 
 // Descriptions are resolved through I18n by the settings queries and DROPPED when the lookup returns the input
-// unchanged (a missing key comes back as itself; docs/RE-components.md), while names are shown verbatim. So every
+// unchanged (a missing key comes back as itself), while names are shown verbatim. So every
 // description is registered as a runtime translation under a key derived from the component id, and the key is
 // what the component carries. Pending entries are flushed into I18n after each factory run.
 std::mutex                                   gTranslationsMutex;
@@ -256,18 +256,27 @@ struct FloatProvider : ProviderBase {
 };
 
 // IStringDataProvider: + getValue, setValue(string_view), commitValue, flush
+// The text field sends every keystroke as setValue (JS onChange -> updateString) and one commitValue when it loses
+// focus (onBlur -> commitString). Keystrokes are buffered here and the mod's setter runs once, on commit, so a mod
+// that saves a file in its setter is not hit per key.
 struct StringProvider : ProviderBase {
     using ProviderBase::ProviderBase;
+    std::optional<std::string> pending; // text typed since the last commit
+
     virtual std::string getValue() const {
+        if (pending) return *pending;
         std::string v;
         with([&](Setting& s) { if (s.getString) v = s.getString(); });
         return v;
     }
-    virtual void setValue(std::string_view value) {
-        with([&](Setting& s) { if (s.setString) s.setString(std::string(value)); });
+    virtual void setValue(std::string_view value) { pending = std::string(value); }
+    virtual void commitValue() {
+        if (!pending) return;
+        std::string v = std::move(*pending);
+        pending.reset();
+        with([&](Setting& s) { if (s.setString) s.setString(v); });
         notify();
     }
-    virtual void commitValue() {}
     virtual bool flush() { return false; }
 };
 

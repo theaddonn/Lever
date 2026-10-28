@@ -119,8 +119,7 @@ xmake -P . -y && xmake run -P . lever_tests
 
 ## Tier 1 status (native settings page)
 
-Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp` (evidence in
-`docs/RE-settings-screen.md` and `docs/RE-components.md`):
+Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp`:
 
 - Every copy hooks `Settings::RegistryBuilder::buildDefaultSettingsRegistry` (exported) at init. The game builds its
   settings registry lazily on the first settings access, so the hook runs before any settings screen exists. Inside
@@ -132,7 +131,7 @@ Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp` (e
 - Pages: the overview page has one text row per registered mod; each mod page is built from the host model on
   demand: toggle (BooleanComponent), slider (NumberComponent<float>), dropdown (OptionComponent), text field
   (StringComponent), button (ActionComponent), banner (BannerComponent), header (TextComponent).
-- Component elements are built in game-sized raw storage (0x3d0 bytes, index at +0x3c8) from the game's allocator.
+- Component elements are built in game-sized raw storage from the game's allocator.
   Text/GroupInfo/Option/Action use their exported constructors; Boolean/Number/String/Banner are hand built: base via
   `TextComponent::$ctor`, then the real vtable, type and derived fields. Data providers are our own classes with the
   game's vtable order; they resolve the setting in the host model on every call, so a mod that unregistered is never
@@ -149,7 +148,7 @@ Implemented in `src/platform/win32/SettingsHook.cpp` + `NativeComponents.cpp` (e
   publisher the vanilla providers use after a write, so the queries re-read the getters. Older hosts without the
   append are tolerated (the call is dropped). Verified in game 2026-10-26 (the example's Reset button).
 
-Not yet: the nav icon is the placeholder (the JS icon table is keyed by vanilla page ids, see `docs/RE-components.md`); labels are literal strings (a localisation key passed
+Not yet: the nav icon is the placeholder (the Ore UI icon table is keyed by vanilla page ids); labels are literal strings (a localisation key passed
 as the label is resolved by the game, so mods can ship keys through a resource pack); `installTier2Hooks()` is still
 a stub; the pause-menu and world-creation surfaces are recorded but not rendered.
 

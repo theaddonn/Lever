@@ -1,6 +1,6 @@
 // Tier 1: the native settings registry hook.
 //
-// The Ore UI settings screen is data driven from Settings::Registry (docs/RE-settings-screen.md): the left nav
+// The Ore UI settings screen is data driven from Settings::Registry: the left nav
 // comes from the "settings-tabs-groups" factory and its section factories, each page is a GroupInfoComponent, and
 // a page's rows come from the factory registered under the page id. The registry is built lazily by
 // ClientInstance::getSettingsRegistry -> Settings::RegistryBuilder::buildDefaultSettingsRegistry (exported), so

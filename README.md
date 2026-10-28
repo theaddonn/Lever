@@ -8,7 +8,7 @@ The cross-copy ABI is built for long-term backward compatibility: a frozen boots
 
 ## Status
 
-**Pre-alpha.** The consumer API, the C ABI, host election and the in-process model are in place. The native hook adds a "Mods" section to the vanilla Ore UI settings screen with one page per registered mod page, rendering toggles, sliders, dropdowns, text fields, buttons and banners with the vanilla widgets. Verified in game: the overview page, every widget kind, persistence of edits, descriptions, late registration and `notifyChanged`. See [docs/DESIGN.md](docs/DESIGN.md) for the plan and the open questions.
+**Alpha.** The consumer API, the C ABI, host election and the in-process model are in place. The native hook adds a "Mods" section to the vanilla Ore UI settings screen with one page per registered mod page, rendering toggles, sliders, dropdowns, text fields, buttons and banners with the vanilla widgets. Verified in game: the overview page, every widget kind, persistence of edits, descriptions, late registration and `notifyChanged`. [Distant Horizons Bedrock](https://github.com/theaddonn/Distant-Horizons-Bedrock) uses it for its settings. Not yet: custom page icons, the pause-menu entry and the world-creation tab (all need the JavaScript tier, see [docs/DESIGN.md](docs/DESIGN.md)).
 
 ## Compatibility
 
@@ -44,28 +44,27 @@ Calls are safe at any time after the mod is loaded; they are buffered until a ho
 
 ### As an xmake package
 
-Put this in your `xmake.lua`, next to your LeviLamina setup:
+Put this in your `xmake.lua`, next to your LeviLamina setup (this is what Distant Horizons Bedrock does):
 
 ```lua
 package("lever")
-    set_urls("https://github.com/theaddonn/Lever.git")
-    add_versions("0.1.0", "<commit sha>")
-    add_deps("levilamina")
+    set_homepage("https://github.com/theaddonn/Lever")
+    set_license("MIT")
+    add_urls("https://github.com/theaddonn/Lever.git")
+    add_versions("0.1.0", "<commit sha of the release tag>")
     on_install("windows", function (package)
-        import("package.tools.xmake").install(package, {target_type = "client"})
-        os.cp("include", package:installdir())
-        os.cp("build/windows/x64/release/lever.lib", package:installdir("lib"))
+        import("package.tools.xmake").install(package)
     end)
 package_end()
 
-add_requires("lever")
+add_requires("lever 0.1.0")
 
 target("MyMod")
     -- ... your levibuildscript rules ...
     add_packages("levilamina", "lever")
 ```
 
-The inline package builds the library with xmake, then copies `include/` and the `.lib` into the package. Adjust the build output path if your xmake version lays it out differently.
+The package clones the repository at that commit and builds the library with your toolchain (the `lever` target installs its headers and `lever.lib` itself; Lever fetches its own `levilamina` client package, which xmake shares with yours when the versions match). Pin a commit from a release tag and bump it to update.
 
 ### As a git submodule
 

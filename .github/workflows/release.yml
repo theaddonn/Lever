@@ -1,0 +1,103 @@
+# Release: publish a GitHub release with tag v<version> (<version> is LEVER_VERSION in xmake.lua). Builds the
+# library and the example mod on Windows and attaches Lever-<version>-windows-x64.zip (include/ + lever.lib) and
+# Lever-example-windows-x64.zip (the LeverExample mod folder). The release body comes from CHANGELOG.md.
+on:
+  release:
+    types:
+      - published
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/AppData/Local/.xmake
+          key: xmake-${{ hashFiles('xmake.lua') }}
+          restore-keys: |
+            xmake-
+
+      - name: Setup LLVM
+        uses: ZhongRuoyu/setup-llvm@v0
+        with:
+          llvm-version: 22
+
+      - run: |
+          xmake repo -u
+
+      - run: |
+          xmake f -a x64 -m release -p windows --example=y -y
+
+      - run: |
+          xmake -w -y
+
+      - name: Assemble the library package
+        shell: bash
+        run: |
+          mkdir -p artifact/lib artifact/library
+          cp -r include artifact/library/
+          cp build/windows/x64/release/lever.lib artifact/library/
+          cp -r bin/LeverExample artifact/example
+          cp CHANGELOG.md LICENSE README.md artifact/library/
+          cp CHANGELOG.md LICENSE README.md artifact/example/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ github.event.repository.name }}-${{ github.sha }}-windows-x64
+          path: |
+            artifact/
+
+  update-release-notes:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tag matches xmake.lua
+        run: |
+          ver=$(sed -n 's/^local LEVER_VERSION = "\(.*\)"$/\1/p' xmake.lua)
+          if [ "v$ver" != "${{ github.event.release.tag_name }}" ]; then
+            echo "release tag ${{ github.event.release.tag_name }} != xmake.lua version v$ver" >&2
+            exit 1
+          fi
+
+      - id: extract-release-notes
+        uses: ffurrer2/extract-release-notes@v3
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          body: |
+            ${{ steps.extract-release-notes.outputs.release_notes }}
+
+  upload-to-release:
+    needs:
+      - build
+      - update-release-notes
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ github.event.repository.name }}-${{ github.sha }}-windows-x64
+          path: artifact
+
+      - run: |
+          ver=${{ github.event.release.tag_name }}
+          ver=${ver#v}
+          rm -f artifact/example/*.pdb
+          (cd artifact/library && zip -r ../../Lever-$ver-windows-x64.zip *)
+          (cd artifact/example && zip -r ../../Lever-example-windows-x64.zip *)
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            Lever-*-windows-x64.zip

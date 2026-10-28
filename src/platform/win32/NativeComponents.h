@@ -1,8 +1,8 @@
 #pragma once
 
 // Builds elements of the game's settings component variant (Settings::Registry::SettingsFactory result items) in
-// memory the game can own and destroy, for Minecraft Bedrock 1.26.51 (docs/RE-settings-screen.md and
-// docs/RE-components.md hold the evidence for every offset below).
+// memory the game can own and destroy, for Minecraft Bedrock 1.26.51 (every offset below was verified against
+// that build).
 //
 // The SDK declares Settings::Component<T> as an empty template, so sizeof()/layout of the SDK component classes and
 // of std::variant over them are WRONG for the real objects. Real layout: a variant element is 0x3d0 bytes, the
